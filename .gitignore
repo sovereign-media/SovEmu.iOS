@@ -1,0 +1,8 @@
+SovEmu.xcodeproj/
+Apps/Mobile/Info.plist
+build/
+DerivedData/
+.build/
+.swiftpm/
+xcuserdata/
+Packages/WebRTC/WebRTC.xcframework/

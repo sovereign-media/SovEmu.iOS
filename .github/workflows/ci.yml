@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SovEmuKit tests
+        working-directory: Packages/SovEmuKit
+        run: swift test
+
+      - name: Fetch WebRTC
+        run: scripts/fetch-webrtc.sh
+
+      - name: Generate the project
+        run: brew install xcodegen && xcodegen generate
+
+      - name: Build for the simulator
+        run: >
+          xcodebuild -project SovEmu.xcodeproj -scheme SovEmu
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build

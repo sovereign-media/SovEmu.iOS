@@ -1,0 +1,60 @@
+# The Xcode project's source of truth. `SovEmu.xcodeproj` is generated from this file by XcodeGen
+# and gitignored: run `xcodegen generate` after a pull that changes it, and change the project
+# here, never in Xcode's project editor.
+#
+#   SovEmu   iPhone + iPad   SwiftUI over SovEmuKit (protocol, models, API) and WebRTC
+name: SovEmu
+
+options:
+  bundleIdPrefix: media.sovereign
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+packages:
+  SovEmuKit:
+    path: Packages/SovEmuKit
+  # A local wrapper around the xcframework scripts/fetch-webrtc.sh downloads (stasel/WebRTC
+  # 157.0.0, pinned by SHA-256). Run that script before generating the project.
+  WebRTC:
+    path: Packages/WebRTC
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  SovEmu:
+    type: application
+    platform: iOS
+    sources:
+      - path: Apps/Mobile
+    dependencies:
+      - package: SovEmuKit
+      - package: WebRTC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: media.sovereign.sovemu
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # The app wraps WebRTC's Objective-C delegates; Swift 6 strict concurrency would need
+        # isolation annotations everywhere for no benefit. SovEmuKit itself is Swift 6.
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIRequiresFullScreen: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown"
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "SovEmu streams games from your SovEmu server on the local network."
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+    info:
+      path: Apps/Mobile/Info.plist
+      properties:
+        # A SovEmu server at home is usually plain HTTP on a LAN address; media is always
+        # encrypted (DTLS-SRTP). Local networking only, not arbitrary loads.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        GCSupportsControllerUserInteraction: true
+        GCSupportedGameControllers:
+          - ProfileName: ExtendedGamepad

@@ -1,2 +1,41 @@
 # SovEmu.iOS
-SovEmu iOS client: SwiftUI, WebRTC streaming from a SovEmu server
+
+The iPhone and iPad client for [SovEmu](https://github.com/sovereign-media/SovEmu): sign in to a
+SovEmu server, pick a system and a game, and play it streamed over WebRTC with a game controller
+or the touch controller.
+
+Checked out as a submodule of `SovEmu` (unpinned, `branch = main`); it builds on its own.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `project.yml` | The Xcode project's source of truth (XcodeGen). `SovEmu.xcodeproj` is generated and gitignored. |
+| `Packages/SovEmuKit` | Swift 6 package: the input wire protocol and the API client and models. Its tests use the same byte vectors as `SovEmu.Protocol`, `SovEmu.Web` and `SovEmu.Android`. |
+| `Apps/Mobile` | The SwiftUI app: sign-in, system carousel, game list, player (WebRTC via `stasel/WebRTC`, GameController input, touch controller). |
+
+## Building
+
+You need Xcode 26+ and XcodeGen (`brew install xcodegen`).
+
+```bash
+(cd Packages/SovEmuKit && swift test)
+scripts/fetch-webrtc.sh      # the pinned WebRTC xcframework, into Packages/WebRTC (gitignored)
+xcodegen generate
+open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/platform=iOS Simulator' build
+```
+
+## Using it
+
+1. First-run setup (the admin account) happens in a browser at the server's address.
+2. In the app, enter the server address (for example `http://192.168.1.20:8080`) and sign in.
+   iOS asks for local-network access the first time.
+3. The server must advertise an address the device can reach (`SOVEMU_ADVERTISE_IP`, the host's
+   LAN address), with UDP 50000-50009 open.
+
+**Controls:**
+- **Controller buttons** are mapped by position, as on the web client (bottom face = B, right face = A).
+- **In-game menu:** the ☰ button, Select+Start, or Home.
+- **Fast-forward:** hold Select+R.
+- **Rewind:** hold Select+L.
+- **Touch controller:** shown when no controller is connected.
