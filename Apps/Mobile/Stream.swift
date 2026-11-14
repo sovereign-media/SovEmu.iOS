@@ -23,6 +23,9 @@ final class Stream: NSObject {
     private var sent: UInt16 = .max
     private var sentHotkeys: UInt8 = 0
     private var lastSend = Date.distantPast
+    private var analogSeq: UInt32 = 0
+    private var sentAnalog = WireProtocol.Analog.centred
+    private var lastAnalogSend = Date.distantPast
 
     /// While true (a menu is open) the game sees nothing pressed.
     var suspended = false
@@ -100,6 +103,14 @@ final class Stream: NSObject {
         let buttons = suspended ? 0 : reading.buttons
         let hotkeys: UInt8 = suspended ? 0 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
         let now = Date()
+        // Sticks: on change, and as a heartbeat while off-centre.
+        let analog = suspended ? .centred : reading.analog
+        if analog != sentAnalog || (analog != .centred && now.timeIntervalSince(lastAnalogSend) > 0.1) {
+            analogSeq &+= 1
+            send(WireProtocol.encodeAnalog(seq: analogSeq, ports: [analog]))
+            sentAnalog = analog
+            lastAnalogSend = now
+        }
         guard buttons != sent || hotkeys != sentHotkeys || now.timeIntervalSince(lastSend) > 0.1 else { return }
         seq &+= 1
         send(WireProtocol.encodeInput(seq: seq, clientTimeMs: now32(), ports: [buttons]))

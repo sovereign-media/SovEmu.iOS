@@ -11,6 +11,10 @@ final class Controller {
     private var touch: UInt16 = 0
     private let lock = NSLock()
 
+    /// The game reads analog sticks (a 3D system): the left stick moves the stick, not the
+    /// D-pad. Otherwise it doubles as a D-pad, as in 2D frontends.
+    var analogSticks = false
+
     func setTouch(_ button: RetroButton, _ pressed: Bool) {
         lock.lock()
         defer { lock.unlock() }
@@ -28,13 +32,26 @@ final class Controller {
         var fastForward: Bool
         var rewind: Bool
         var menu: Bool
+        var analog: WireProtocol.Analog
     }
 
-    private func gamepadState() -> (UInt16, Bool) {
+    private func gamepadState() -> (UInt16, Bool, WireProtocol.Analog) {
         var state: UInt16 = 0
         var home = false
+        var analog: WireProtocol.Analog?
         for controller in GCController.controllers() {
             guard let pad = controller.extendedGamepad else { continue }
+            if analog == nil {
+                // GameController's y axes point up; libretro's point down.
+                analog = WireProtocol.Analog(
+                    lx: WireProtocol.Analog.stick(pad.leftThumbstick.xAxis.value),
+                    ly: WireProtocol.Analog.stick(-pad.leftThumbstick.yAxis.value),
+                    rx: WireProtocol.Analog.stick(pad.rightThumbstick.xAxis.value),
+                    ry: WireProtocol.Analog.stick(-pad.rightThumbstick.yAxis.value),
+                    l2: WireProtocol.Analog.trigger(pad.leftTrigger.value),
+                    r2: WireProtocol.Analog.trigger(pad.rightTrigger.value)
+                )
+            }
             let pairs: [(GCControllerButtonInput?, RetroButton)] = [
                 (pad.buttonA, .b), (pad.buttonB, .a), (pad.buttonX, .y), (pad.buttonY, .x),
                 (pad.leftShoulder, .l), (pad.rightShoulder, .r),
@@ -46,7 +63,8 @@ final class Controller {
             for (input, button) in pairs where input?.isPressed == true {
                 state |= button.bit
             }
-            let x = pad.leftThumbstick.xAxis.value, y = pad.leftThumbstick.yAxis.value
+            let x = analogSticks ? 0 : pad.leftThumbstick.xAxis.value
+            let y = analogSticks ? 0 : pad.leftThumbstick.yAxis.value
             if x < -0.5 { state |= RetroButton.left.bit }
             if x > 0.5 { state |= RetroButton.right.bit }
             if y > 0.5 { state |= RetroButton.up.bit }
@@ -64,11 +82,11 @@ final class Controller {
             }
             home = home || (keyboard.button(forKeyCode: .escape)?.isPressed ?? false)
         }
-        return (state, home)
+        return (state, home, analog ?? .centred)
     }
 
     func read() -> Reading {
-        let (pads, home) = gamepadState()
+        let (pads, home, analog) = gamepadState()
         lock.lock()
         let raw = pads | touch
         lock.unlock()
@@ -78,6 +96,6 @@ final class Controller {
         let menu = home || (select && raw & RetroButton.start.bit != 0)
         var buttons = raw
         if ff || rewind { buttons &= ~(RetroButton.select.bit | RetroButton.l.bit | RetroButton.r.bit) }
-        return Reading(buttons: buttons, fastForward: ff, rewind: rewind, menu: menu)
+        return Reading(buttons: buttons, fastForward: ff, rewind: rewind, menu: menu, analog: analog)
     }
 }
