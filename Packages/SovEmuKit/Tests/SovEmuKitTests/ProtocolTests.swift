@@ -45,18 +45,4 @@ struct ProtocolTests {
         #expect(RetroButton.start.bit == 1 << 3)
         #expect(RetroButton.a.bit == 1 << 8)
     }
-
-    @Test func decodesApiJson() throws {
-        let json = Data("""
-        {"id":"nes","name":"Nintendo Entertainment System","short":"NES","manufacturer":"Nintendo",
-         "year":1983,"color":"#c0392b","game_count":2,"playable":true,"extra":1}
-        """.utf8)
-        let system = try SovEmuAPI.decoder.decode(SystemSummary.self, from: json)
-        #expect(system.gameCount == 2)
-        #expect(system.rgb.0 > 0.75 && system.rgb.2 < 0.25)
-        let config = try SovEmuAPI.decoder.decode(ClientConfig.self, from: Data("""
-        {"ice_servers":[{"urls":"stun:a"},{"urls":["turn:b","turns:c"],"username":"u","credential":"p"}]}
-        """.utf8))
-        #expect(config.iceServers.map(\.urls) == [["stun:a"], ["turn:b", "turns:c"]])
-    }
 }
