@@ -22,6 +22,10 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     public let color: String
     public let gameCount: Int
     public let playable: Bool
+    /// A 3D system: renders with OpenGL and reads analog sticks (absent from older servers).
+    public let needsGpu: Bool?
+    /// For a 3D system: `gpu`, `software` (slow) or `off`.
+    public let rendering: String?
 
     /// The accent colour as (red, green, blue) in 0...1.
     public var rgb: (Double, Double, Double) {
