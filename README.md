@@ -33,9 +33,21 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
 3. The server must advertise an address the device can reach (`SOVEMU_ADVERTISE_IP`, the host's
    LAN address), with UDP 50000-50009 open.
 
-**Controls:**
-- **Controller buttons** are mapped by position, as on the web client (bottom face = B, right face = A).
-- **In-game menu:** the ☰ button, Select+Start, or Home.
-- **Fast-forward:** hold Select+R.
-- **Rewind:** hold Select+L.
+**Controls** (as `docs/CONTROLLERS.md` in SovEmu describes, shared with the web and Android clients):
+- **Controllers** (Bluetooth or USB/Lightning) are recognised by model: Xbox, DualSense,
+  DualShock 4 and Switch Pro by `productCategory`, anything else by name. Buttons map by
+  position by default (bottom face = RetroPad B, right face = A).
+- **Players:** each controller is its own player, in the order they connect (a new one takes
+  the lowest free player, a disconnected one frees it). The keyboard and the touch controls are
+  player 1.
+- **Remapping:** in-game menu → Controllers. Change a device's player (for this session), or
+  pick a RetroPad button and press the input to bind (tap B/○/A or Escape to cancel; hold it to
+  bind that button itself). Mappings are saved to your account per controller model, so they
+  follow you to the other clients; "Reset to defaults" removes one.
+- **Keyboard:** arrows, Z (B), X (A), A (Y), S (X), Q (L), W (R), Enter (Start), Shift (Select);
+  Tab fast-forwards, Backspace rewinds, Escape opens the menu.
+- **In-game menu:** the ☰ button, Select+Start, Home or Escape. A controller drives it: the
+  D-pad moves, the bottom face confirms, the right face goes back.
+- **Fast-forward:** hold Select+R. **Rewind:** hold Select+L. (After mapping: the RetroPad
+  buttons, wherever they are bound.)
 - **Touch controller:** shown when no controller is connected.
