@@ -208,4 +208,58 @@ struct ControllersTests {
         #expect(MenuAction.of("ArrowDown") == .down)
         #expect(MenuAction.of("l1") == nil)
     }
+
+    /// A server holding the user's own mappings over its defaults, as `controllerMappings` does.
+    private actor FakeServer: ControllerMappingService {
+        var own: [String: ControllerMapping]
+        let defaults: [String: ControllerMapping]
+        private(set) var calls: [String] = []
+
+        init(own: [ControllerMapping], defaults: [ControllerMapping]) {
+            self.own = Dictionary(uniqueKeysWithValues: own.map { ($0.controller, $0) })
+            self.defaults = Dictionary(uniqueKeysWithValues: defaults.map { ($0.controller, $0) })
+        }
+
+        func controllerMappings() async throws -> [ControllerMapping] {
+            calls.append("controllerMappings")
+            return Array(defaults.merging(own) { $1 }.values)
+        }
+
+        func resetControllerMapping(controller: String) async throws -> Bool {
+            calls.append("reset \(controller)")
+            return own.removeValue(forKey: controller) != nil
+        }
+    }
+
+    @Test func resetFallsBackToTheServersDefaultThenTheBuiltIn() async throws {
+        let mine = ControllerMap.pad.rebinding("south", to: .a)
+        let admin = ControllerMap.pad.rebinding("north", to: .start)
+        let server = FakeServer(
+            own: [
+                ControllerMapping(controller: "dualsense", name: "DualSense", bindings: mine.bindingInputs, source: .user),
+                ControllerMapping(controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")], source: .user),
+            ],
+            defaults: [ControllerMapping(controller: "dualsense", name: "DualSense", bindings: admin.bindingInputs, source: .admin)])
+        let store = MappingStore(try await server.controllerMappings())
+        #expect(store.mapping(for: "dualsense") == mine && store.source(for: "dualsense") == .user)
+
+        // A model with a server default goes back to it, not to the built-in mapping.
+        let reset = try await MappingStore.reset("dualsense", with: server)
+        #expect(await server.calls == ["controllerMappings", "reset dualsense", "controllerMappings"])
+        #expect(reset.mapping(for: "dualsense") == admin)
+        #expect(reset.source(for: "dualsense") == .admin)
+        #expect(reset.mapping(for: "keyboard").inputs(for: .start) == ["KeyP"], "other models are kept")
+
+        // One without goes back to the built-in defaults.
+        let keyboard = try await MappingStore.reset("keyboard", with: server)
+        #expect(keyboard.mapping(for: "keyboard") == .keyboard)
+        #expect(keyboard.source(for: "keyboard") == nil)
+        #expect(keyboard.mapping(for: "xbox") == .pad)
+
+        var edited = keyboard
+        edited.setUser("xbox", mine)
+        #expect(edited.source(for: "xbox") == .user && edited.mapping(for: "xbox") == mine)
+        edited.record(ControllerMapping(controller: "xbox", name: "Xbox", bindings: admin.bindingInputs, source: .user))
+        #expect(edited.mapping(for: "xbox") == admin)
+    }
 }

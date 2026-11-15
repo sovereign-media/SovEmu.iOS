@@ -313,6 +313,47 @@ public struct ControllerMap: Equatable, Sendable {
     }
 }
 
+/// The mappings in force for a user, as `controllerMappings` returns them: their own, else the
+/// server's default for the model. A model the server does not list uses the built-in defaults.
+public struct MappingStore: Sendable, Equatable {
+    public struct Entry: Sendable, Equatable {
+        public let map: ControllerMap
+        public let source: MappingSource
+    }
+
+    private var entries: [String: Entry]
+
+    public init(_ mappings: [ControllerMapping] = []) {
+        entries = Dictionary(mappings.map { ($0.controller, Entry(map: ControllerMap(bindings: $0.bindings), source: $0.source)) }) { $1 }
+    }
+
+    /// The mapping in force for a controller model.
+    public func mapping(for controller: String) -> ControllerMap {
+        entries[controller]?.map ?? .defaults(for: controller)
+    }
+
+    /// Where it comes from; nil for the built-in defaults.
+    public func source(for controller: String) -> MappingSource? { entries[controller]?.source }
+
+    /// The user changed a model's mapping (saved, or being saved, as theirs).
+    public mutating func setUser(_ controller: String, _ map: ControllerMap) {
+        entries[controller] = Entry(map: map, source: .user)
+    }
+
+    /// What the server answered to a save.
+    public mutating func record(_ mapping: ControllerMapping) {
+        entries[mapping.controller] = Entry(map: ControllerMap(bindings: mapping.bindings), source: mapping.source)
+    }
+
+    /// Removes the user's own mapping for a model on the server, then reads back every mapping
+    /// in force: the model falls back to the server's default if there is one, and only
+    /// otherwise to the built-in defaults.
+    public static func reset(_ controller: String, with service: some ControllerMappingService) async throws -> MappingStore {
+        _ = try await service.resetControllerMapping(controller: controller)
+        return MappingStore(try await service.controllerMappings())
+    }
+}
+
 // MARK: - Hotkeys
 
 /// Hotkeys read from a port's RetroPad state, after mapping.

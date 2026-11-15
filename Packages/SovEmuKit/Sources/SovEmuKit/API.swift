@@ -104,14 +104,40 @@ public struct ControllerBinding: Codable, Sendable, Equatable {
     static let fields = "input button"
 }
 
-/// A user's mapping for one controller model.
+/// Where a mapping in force comes from (`MappingSource`).
+public enum MappingSource: String, Codable, Sendable {
+    /// The user's own.
+    case user = "USER"
+    /// An admin's default, set on the admin page.
+    case admin = "ADMIN"
+    /// A default from the server's environment (`SOVEMU_CONTROLLERS__<n>__…`).
+    case environment = "ENVIRONMENT"
+
+    /// A server default rather than the user's own.
+    public var isDefault: Bool { self != .user }
+
+    public init(from decoder: Decoder) throws {
+        // A source a newer server adds is still a default, not the user's.
+        self = MappingSource(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .admin
+    }
+}
+
+/// The mapping in force for one controller model: the user's own, else the server's default.
 public struct ControllerMapping: Codable, Sendable, Equatable {
     /// `keyboard`, a known model (`xbox`, `dualsense` …) or `pad:name:<slug>`.
     public let controller: String
     public let name: String
     public let bindings: [ControllerBinding]
+    public let source: MappingSource
 
-    static let fields = "controller name bindings { \(ControllerBinding.fields) }"
+    public init(controller: String, name: String, bindings: [ControllerBinding], source: MappingSource) {
+        self.controller = controller
+        self.name = name
+        self.bindings = bindings
+        self.source = source
+    }
+
+    static let fields = "controller name bindings { \(ControllerBinding.fields) } source"
 }
 
 public struct ClientConfig: Codable, Sendable {
@@ -290,7 +316,8 @@ public final class SovEmuAPI: Sendable {
         _ = try await post(Documents.loadState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "loadState", as: Bool.self)
     }
 
-    /// This user's saved controller mappings; a controller without one uses the defaults.
+    /// The mappings in force for this user: their own, else the server's default for the
+    /// model. A model missing from the list uses the client's built-in defaults.
     public func controllerMappings() async throws -> [ControllerMapping] {
         try await post(Documents.controllerMappings, field: "controllerMappings")
     }
@@ -300,7 +327,8 @@ public final class SovEmuAPI: Sendable {
         try await post(Documents.saveControllerMapping, Self.mappingVariables(controller: controller, name: name, bindings: bindings),
                        field: "saveControllerMapping")
     }
-    /// Puts a controller model back on the defaults; returns whether it had a mapping.
+    /// Removes the user's own mapping for a model; returns whether it had one. What then applies
+    /// (a server default, or the built-in one) comes from `controllerMappings` again.
     @discardableResult
     public func resetControllerMapping(controller: String) async throws -> Bool {
         try await post(Documents.resetControllerMapping, ["controller": .string(controller)], field: "resetControllerMapping")
@@ -319,3 +347,11 @@ public final class SovEmuAPI: Sendable {
 struct JSONNull: Decodable {
     init(from decoder: Decoder) throws {}
 }
+
+/// The mapping calls `MappingStore` needs (`SovEmuAPI`, or a stand-in in tests).
+public protocol ControllerMappingService: Sendable {
+    func controllerMappings() async throws -> [ControllerMapping]
+    func resetControllerMapping(controller: String) async throws -> Bool
+}
+
+extension SovEmuAPI: ControllerMappingService {}

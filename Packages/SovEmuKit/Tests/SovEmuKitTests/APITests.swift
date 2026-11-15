@@ -97,7 +97,7 @@ struct APITests {
     }
 
     @Test func sendsAndReadsControllerMappings() throws {
-        #expect(Documents.controllerMappings.contains("controllerMappings { controller name bindings { input button } }"))
+        #expect(Documents.controllerMappings.contains("controllerMappings { controller name bindings { input button } source }"))
         #expect(Documents.saveControllerMapping.contains("$bindings: [BindingInput!]!"))
         #expect(Documents.saveControllerMapping.contains("saveControllerMapping(controller: $controller, name: $name, bindings: $bindings)"))
         #expect(Documents.resetControllerMapping.contains("resetControllerMapping(controller: $controller)"))
@@ -114,9 +114,14 @@ struct APITests {
 
         let mappings = try decode([ControllerMapping].self, "controllerMappings", """
             {"data":{"controllerMappings":[{"controller":"keyboard","name":"Keyboard",
-             "bindings":[{"input":"KeyP","button":"START"}]}]}}
+             "bindings":[{"input":"KeyP","button":"START"}],"source":"USER"},
+             {"controller":"xbox","name":"Xbox","bindings":[],"source":"ENVIRONMENT"},
+             {"controller":"dualsense","name":"DualSense","bindings":[],"source":"SOMETHING_NEW"}]}}
             """)
-        #expect(mappings == [ControllerMapping(controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")])])
+        #expect(mappings[0] == ControllerMapping(
+            controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")], source: .user))
+        #expect(mappings.map(\.source) == [.user, .environment, .admin])
+        #expect(!mappings[0].source.isDefault && mappings[1].source.isDefault)
         #expect(try decode(Bool.self, "resetControllerMapping", #"{"data":{"resetControllerMapping":false}}"#) == false)
 
         let invalid = #"{"data":null,"errors":[{"message":"a controller ID is up to 64 lowercase letters","extensions":{"code":"BAD_REQUEST"}}]}"#

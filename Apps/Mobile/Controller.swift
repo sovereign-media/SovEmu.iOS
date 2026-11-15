@@ -45,7 +45,7 @@ final class Controller {
     private var touch: UInt16 = 0
     private var players = Players<ObjectIdentifier>()
     private var keyboardPort = 0
-    private var saved: [String: ControllerMap] = [:]
+    private var store = MappingStore()
     private var identities: [ObjectIdentifier: ControllerIdentity] = [:]
     private var observers: [NSObjectProtocol] = []
 
@@ -83,25 +83,40 @@ final class Controller {
 
     // MARK: Mappings
 
-    /// The user's saved mappings, from `controllerMappings`.
-    func setMappings(_ mappings: [ControllerMapping]) {
+    /// The mappings in force (the user's, else the server's defaults), from `controllerMappings`.
+    func setMappings(_ store: MappingStore) {
         lock.lock()
         defer { lock.unlock() }
-        saved = Dictionary(mappings.map { ($0.controller, ControllerMap(bindings: $0.bindings)) }) { $1 }
+        self.store = store
     }
 
-    /// The mapping in force for a controller model: the user's, else the defaults.
+    /// The mapping in force for a controller model: the user's, else the server's default,
+    /// else the built-in defaults.
     func mapping(for controller: String) -> ControllerMap {
         lock.lock()
         defer { lock.unlock() }
-        return saved[controller] ?? .defaults(for: controller)
+        return store.mapping(for: controller)
     }
 
-    /// Records a saved (or, with nil, reset) mapping.
-    func remember(_ controller: String, _ mapping: ControllerMap?) {
+    /// Where a model's mapping comes from; nil for the built-in defaults.
+    func source(for controller: String) -> MappingSource? {
         lock.lock()
         defer { lock.unlock() }
-        saved[controller] = mapping
+        return store.source(for: controller)
+    }
+
+    /// The user changed a model's mapping (as theirs, before the server answers).
+    func setUser(_ controller: String, _ mapping: ControllerMap) {
+        lock.lock()
+        defer { lock.unlock() }
+        store.setUser(controller, mapping)
+    }
+
+    /// What the server answered to a save.
+    func record(_ mapping: ControllerMapping) {
+        lock.lock()
+        defer { lock.unlock() }
+        store.record(mapping)
     }
 
     // MARK: Devices and players
@@ -213,7 +228,7 @@ final class Controller {
         lock.lock()
         let touch = self.touch
         let keyboardPort = self.keyboardPort
-        let saved = self.saved
+        let store = self.store
         var pads: [(GCExtendedGamepad, Int, ControllerMap)] = []
         for controller in controllers {
             guard let pad = controller.extendedGamepad else { continue }
@@ -221,7 +236,7 @@ final class Controller {
             let identity = identities[key]
                 ?? ControllerIdentity.identify(productCategory: controller.productCategory, vendorName: controller.vendorName)
             identities[key] = identity
-            pads.append((pad, players.join(key), saved[identity.id] ?? .defaults(for: identity.id)))
+            pads.append((pad, players.join(key), store.mapping(for: identity.id)))
         }
         lock.unlock()
 
@@ -255,7 +270,7 @@ final class Controller {
         var touchHotkeys = HotkeyReading.read(touch)
         if let keyboard {
             let keys = Self.pressedKeys(keyboard)
-            let mapping = saved[ControllerIdentity.keyboardID] ?? .keyboard
+            let mapping = store.mapping(for: ControllerIdentity.keyboardID)
             fastForward = fastForward || keys.contains(KeyNames.fastForward)
             rewind = rewind || keys.contains(KeyNames.rewind)
             menu = menu || (keys.contains(KeyNames.menu) && mapping.bindings[KeyNames.menu] == nil)

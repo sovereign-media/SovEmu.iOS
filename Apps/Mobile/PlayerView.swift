@@ -143,8 +143,9 @@ struct PlayerView: View {
             let info = try await api.startSession(gameId: game.id)
             session = info
             controller.analogSticks = system.needsGpu
-            // The user's mappings; a controller without one (or no answer) uses the defaults.
-            if let mappings = try? await api.controllerMappings() { controller.setMappings(mappings) }
+            // The mappings in force (the user's, else the server's defaults); a model without
+            // one, or no answer, uses the built-in defaults.
+            if let mappings = try? await api.controllerMappings() { controller.setMappings(MappingStore(mappings)) }
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
             s.onState = { state in if state == .failed { status = "Connection failed" } }
             s.onMenu = {

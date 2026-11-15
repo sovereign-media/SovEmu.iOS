@@ -122,7 +122,10 @@ final class GameMenu {
                     detail: inputs.isEmpty ? "—" : inputs.joined(separator: ", "),
                     action: { [weak self] in self?.startCapture(device, button) }))
             }
-            rows.append(MenuItem(id: "reset", title: "Reset to defaults", action: { [weak self] in self?.reset(identity) }))
+            // Only the user's own mapping can be reset; a default is already in force.
+            if controller.source(for: identity.id) == .user {
+                rows.append(MenuItem(id: "reset", title: "Reset to defaults", action: { [weak self] in self?.reset(identity) }))
+            }
             rows.append(MenuItem(id: "back", title: "Back", action: { [weak self] in self?.show(.controllers) }))
             return rows
         }
@@ -132,7 +135,11 @@ final class GameMenu {
         switch page {
         case .main: nil
         case .controllers: devices.isEmpty ? "No controller or keyboard connected. The touch controls are player 1." : "Controllers"
-        case .device(let key): devices.first { $0.key == key }.map { "\($0.identity.name) (\($0.identity.id))" }
+        case .device(let key):
+            devices.first { $0.key == key }.map { device in
+                let source = controller.source(for: device.identity.id) == .user ? "Yours" : "Default"
+                return "\(device.identity.name) (\(device.identity.id)) · \(source)"
+            }
         }
     }
 
@@ -180,27 +187,30 @@ final class GameMenu {
     private func bind(_ input: String, _ capture: Capture) {
         let id = capture.identity.id
         let mapping = controller.mapping(for: id).rebinding(input, to: capture.button)
-        controller.remember(id, mapping)
+        controller.setUser(id, mapping)
         cancelCapture()
         revision += 1
         guard let api else { return }
         let name = capture.identity.name
         Task { @MainActor in
             do {
-                try await api.saveControllerMapping(controller: id, name: name, bindings: mapping.bindingInputs)
+                let saved = try await api.saveControllerMapping(controller: id, name: name, bindings: mapping.bindingInputs)
+                self.controller.record(saved)
+                self.revision += 1
             } catch {
                 self.flash("Not saved: \(error.localizedDescription)")
             }
         }
     }
 
+    /// Removes the user's own mapping, then uses what the server says is in force: its default
+    /// for the model if it has one, else the built-in defaults.
     private func reset(_ identity: ControllerIdentity) {
-        controller.remember(identity.id, nil)
-        revision += 1
         guard let api else { return }
         Task { @MainActor in
             do {
-                try await api.resetControllerMapping(controller: identity.id)
+                self.controller.setMappings(try await MappingStore.reset(identity.id, with: api))
+                self.revision += 1
                 self.flash("\(identity.name): back to the defaults")
             } catch {
                 self.flash("Not reset: \(error.localizedDescription)")
