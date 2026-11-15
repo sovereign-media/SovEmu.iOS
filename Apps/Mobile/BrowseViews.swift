@@ -128,7 +128,7 @@ struct SystemsView: View {
         .task {
             do {
                 systems = try await model.api?.systems().filter { $0.gameCount > 0 } ?? []
-            } catch let e as APIError where e.status == 401 {
+            } catch let e as APIError where e.isUnauthenticated {
                 model.signedIn = false
             } catch {
                 self.error = error.localizedDescription
@@ -156,10 +156,10 @@ struct GamesView: View {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(game.title).font(.headline)
-                                if !game.tags.isEmpty { Text(game.tags).font(.caption).foregroundStyle(.secondary) }
+                                if !game.tags.isEmpty { Text(game.tags.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary) }
                             }
                             Spacer()
-                            Text("Played \(game.playCount ?? 0)×").font(.caption).foregroundStyle(.secondary)
+                            Text("Played \(game.playCount)×").font(.caption).foregroundStyle(.secondary)
                             Image(systemName: "play.fill").foregroundStyle(system.accent)
                         }
                     }

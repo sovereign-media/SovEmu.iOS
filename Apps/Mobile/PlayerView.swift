@@ -121,7 +121,7 @@ struct PlayerView: View {
             let config = try? await api.config()
             let info = try await api.startSession(gameId: game.id)
             session = info
-            controller.analogSticks = system.needsGpu ?? false
+            controller.analogSticks = system.needsGpu
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
             s.onState = { state in if state == .failed { status = "Connection failed" } }
             s.onMenu = { menuOpen = true }

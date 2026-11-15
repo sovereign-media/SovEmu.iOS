@@ -77,9 +77,9 @@ final class Stream: NSObject {
             self.gathered = nil
         }
         let local = pc.localDescription?.sdp ?? offer.sdp
-        let answer = try await api.offer(sessionId: sessionId, SessionDescription(type: "offer", sdp: local))
+        let answer = try await api.offer(sessionId: sessionId, sdp: local)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: answer.sdp)) { error in
+            pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: answer)) { error in
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             }
         }
