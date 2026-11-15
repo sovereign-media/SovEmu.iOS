@@ -20,12 +20,15 @@ final class Stream: NSObject {
     private var gathered: CheckedContinuation<Void, Never>?
     private var timer: DispatchSourceTimer?
     private var seq: UInt32 = 0
-    private var sent: UInt16 = .max
+    private var sent: [UInt16] = []
     private var sentHotkeys: UInt8 = 0
     private var lastSend = Date.distantPast
     private var analogSeq: UInt32 = 0
-    private var sentAnalog = WireProtocol.Analog.centred
+    private var sentAnalog: [WireProtocol.Analog] = [.centred]
     private var lastAnalogSend = Date.distantPast
+    /// The most ports sent this session: a player whose controller went away is then sent as
+    /// released and centred rather than dropped.
+    private var portCount = 1
 
     /// While true (a menu is open) the game sees nothing pressed.
     var suspended = false
@@ -100,20 +103,25 @@ final class Stream: NSObject {
         if reading.menu && !menuHeld { DispatchQueue.main.async { self.onMenu?() } }
         menuHeld = reading.menu
         guard channel.readyState == .open else { return }
-        let buttons = suspended ? 0 : reading.buttons
+        // Every player from 1 to the highest in use; a menu shows the game nothing pressed.
+        portCount = max(portCount, reading.ports.count)
+        let pads = reading.ports + [UInt16](repeating: 0, count: portCount - reading.ports.count)
+        let sticks = reading.analog + [WireProtocol.Analog](repeating: .centred, count: portCount - reading.analog.count)
+        let buttons = suspended ? pads.map { _ in 0 } : pads
         let hotkeys: UInt8 = suspended ? 0 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
         let now = Date()
         // Sticks: on change, and as a heartbeat while off-centre.
-        let analog = suspended ? .centred : reading.analog
-        if analog != sentAnalog || (analog != .centred && now.timeIntervalSince(lastAnalogSend) > 0.1) {
+        let analog = suspended ? sticks.map { _ in .centred } : sticks
+        let offCentre = analog.contains { $0 != .centred }
+        if analog != sentAnalog || (offCentre && now.timeIntervalSince(lastAnalogSend) > 0.1) {
             analogSeq &+= 1
-            send(WireProtocol.encodeAnalog(seq: analogSeq, ports: [analog]))
+            send(WireProtocol.encodeAnalog(seq: analogSeq, ports: analog))
             sentAnalog = analog
             lastAnalogSend = now
         }
         guard buttons != sent || hotkeys != sentHotkeys || now.timeIntervalSince(lastSend) > 0.1 else { return }
         seq &+= 1
-        send(WireProtocol.encodeInput(seq: seq, clientTimeMs: now32(), ports: [buttons]))
+        send(WireProtocol.encodeInput(seq: seq, clientTimeMs: now32(), ports: buttons))
         if hotkeys != sentHotkeys || hotkeys != 0 {
             send(WireProtocol.encodeHotkeys(fastForward: hotkeys & 1 != 0, rewind: hotkeys & 2 != 0))
         }

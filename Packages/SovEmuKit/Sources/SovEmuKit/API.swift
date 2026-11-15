@@ -89,6 +89,31 @@ public struct IceServer: Codable, Sendable {
     }
 }
 
+/// One input driving one RetroPad button: the schema's `Binding` (and `BindingInput`).
+public struct ControllerBinding: Codable, Sendable, Equatable {
+    /// A controller input (`south`, `l1`, `up` …) or a keyboard's `KeyboardEvent.code`.
+    public let input: String
+    /// A `PadButton`: `B`, `SELECT`, `L2` …
+    public let button: String
+
+    public init(input: String, button: String) {
+        self.input = input
+        self.button = button
+    }
+
+    static let fields = "input button"
+}
+
+/// A user's mapping for one controller model.
+public struct ControllerMapping: Codable, Sendable, Equatable {
+    /// `keyboard`, a known model (`xbox`, `dualsense` …) or `pad:name:<slug>`.
+    public let controller: String
+    public let name: String
+    public let bindings: [ControllerBinding]
+
+    static let fields = "controller name bindings { \(ControllerBinding.fields) }"
+}
+
 public struct ClientConfig: Codable, Sendable {
     /// The `JSON` scalar `iceServers`: an array of `RTCIceServer` objects.
     public let iceServers: [IceServer]
@@ -119,6 +144,8 @@ public enum GraphQLValue: Encodable, Sendable, Equatable {
     case string(String)
     case int(Int)
     case bool(Bool)
+    case list([GraphQLValue])
+    case object([String: GraphQLValue])
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
@@ -126,6 +153,8 @@ public enum GraphQLValue: Encodable, Sendable, Equatable {
         case .string(let v): try c.encode(v)
         case .int(let v): try c.encode(v)
         case .bool(let v): try c.encode(v)
+        case .list(let v): try c.encode(v)
+        case .object(let v): try c.encode(v)
         }
     }
 }
@@ -167,6 +196,14 @@ enum Documents {
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
     static let saveState = "mutation SaveState($sessionId: ID!, $slot: Int!) { saveState(sessionId: $sessionId, slot: $slot) }"
     static let loadState = "mutation LoadState($sessionId: ID!, $slot: Int!) { loadState(sessionId: $sessionId, slot: $slot) }"
+    static let controllerMappings = "query ControllerMappings { controllerMappings { \(ControllerMapping.fields) } }"
+    static let saveControllerMapping = """
+        mutation SaveControllerMapping($controller: String!, $name: String!, $bindings: [BindingInput!]!) { \
+        saveControllerMapping(controller: $controller, name: $name, bindings: $bindings) { \(ControllerMapping.fields) } }
+        """
+    static let resetControllerMapping = """
+        mutation ResetControllerMapping($controller: String!) { resetControllerMapping(controller: $controller) }
+        """
 }
 
 // MARK: - Client
@@ -251,6 +288,30 @@ public final class SovEmuAPI: Sendable {
     }
     public func loadState(sessionId: String, slot: Int) async throws {
         _ = try await post(Documents.loadState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "loadState", as: Bool.self)
+    }
+
+    /// This user's saved controller mappings; a controller without one uses the defaults.
+    public func controllerMappings() async throws -> [ControllerMapping] {
+        try await post(Documents.controllerMappings, field: "controllerMappings")
+    }
+    /// Saves a controller model's mapping, replacing its defaults wherever this user plays.
+    @discardableResult
+    public func saveControllerMapping(controller: String, name: String, bindings: [ControllerBinding]) async throws -> ControllerMapping {
+        try await post(Documents.saveControllerMapping, Self.mappingVariables(controller: controller, name: name, bindings: bindings),
+                       field: "saveControllerMapping")
+    }
+    /// Puts a controller model back on the defaults; returns whether it had a mapping.
+    @discardableResult
+    public func resetControllerMapping(controller: String) async throws -> Bool {
+        try await post(Documents.resetControllerMapping, ["controller": .string(controller)], field: "resetControllerMapping")
+    }
+
+    static func mappingVariables(controller: String, name: String, bindings: [ControllerBinding]) -> [String: GraphQLValue] {
+        [
+            "controller": .string(controller),
+            "name": .string(name),
+            "bindings": .list(bindings.map { .object(["input": .string($0.input), "button": .string($0.button)]) }),
+        ]
     }
 }
 

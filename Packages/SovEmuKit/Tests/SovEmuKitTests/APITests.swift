@@ -96,6 +96,34 @@ struct APITests {
         #expect(config.iceServers.map(\.urls) == [["stun:a"], ["turn:b", "turns:c"]])
     }
 
+    @Test func sendsAndReadsControllerMappings() throws {
+        #expect(Documents.controllerMappings.contains("controllerMappings { controller name bindings { input button } }"))
+        #expect(Documents.saveControllerMapping.contains("$bindings: [BindingInput!]!"))
+        #expect(Documents.saveControllerMapping.contains("saveControllerMapping(controller: $controller, name: $name, bindings: $bindings)"))
+        #expect(Documents.resetControllerMapping.contains("resetControllerMapping(controller: $controller)"))
+
+        // Bindings go as a list of objects with the schema's field names.
+        let variables = SovEmuAPI.mappingVariables(
+            controller: "dualsense", name: "DualSense Wireless Controller",
+            bindings: [ControllerBinding(input: "south", button: "A"), ControllerBinding(input: "east", button: "B")])
+        let request = try SovEmuAPI.request(baseURL: base, query: Documents.saveControllerMapping, variables: variables)
+        let sent = try #require(try body(request)["variables"] as? [String: Any])
+        #expect(sent["controller"] as? String == "dualsense")
+        #expect(sent["name"] as? String == "DualSense Wireless Controller")
+        #expect(sent["bindings"] as? [[String: String]] == [["input": "south", "button": "A"], ["input": "east", "button": "B"]])
+
+        let mappings = try decode([ControllerMapping].self, "controllerMappings", """
+            {"data":{"controllerMappings":[{"controller":"keyboard","name":"Keyboard",
+             "bindings":[{"input":"KeyP","button":"START"}]}]}}
+            """)
+        #expect(mappings == [ControllerMapping(controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")])])
+        #expect(try decode(Bool.self, "resetControllerMapping", #"{"data":{"resetControllerMapping":false}}"#) == false)
+
+        let invalid = #"{"data":null,"errors":[{"message":"a controller ID is up to 64 lowercase letters","extensions":{"code":"BAD_REQUEST"}}]}"#
+        let error = try #require(throws: APIError.self) { try decode(ControllerMapping.self, "saveControllerMapping", invalid) }
+        #expect(error.code == "BAD_REQUEST")
+    }
+
     @Test func throwsTheFirstErrorWithItsCode() throws {
         let unauthenticated = """
             {"data":null,"errors":[{"message":"sign in first","locations":[{"line":1,"column":17}],

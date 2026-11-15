@@ -12,7 +12,8 @@ struct VideoView: UIViewRepresentable {
 }
 
 /// The player: starts the session, streams it and overlays a touch controller. The in-game
-/// menu (the ☰ button, Select+Start or Home on a controller) saves, loads and quits.
+/// menu (the ☰ button, Select+Start, Home on a controller or Escape) saves, loads, remaps
+/// controllers, moves them between players, and quits; a controller drives it as well as touch.
 struct PlayerView: View {
     @Environment(AppModel.self) private var model
     let system: SystemSummary
@@ -26,6 +27,7 @@ struct PlayerView: View {
     @State private var showTouch = GCController.controllers().isEmpty
     @State private var toast: String?
     @State private var controller = Controller()
+    @State private var gameMenu: GameMenu?
     @State private var video: RTCMTLVideoView = {
         let v = RTCMTLVideoView(frame: .zero)
         v.videoContentMode = .scaleAspectFit
@@ -70,30 +72,49 @@ struct PlayerView: View {
 
     private var menu: some View {
         ZStack {
-            Color.black.opacity(0.7).ignoresSafeArea().onTapGesture { menuOpen = false }
-            VStack(alignment: .leading, spacing: 4) {
-                Text(game.title).font(.subheadline).foregroundStyle(.secondary).padding(8)
-                menuButton("Resume") { menuOpen = false }
-                menuButton("Save state (slot 1)") { await run("Saved") { try await $0.saveState(sessionId: $1, slot: 1) } }
-                menuButton("Load state (slot 1)") { await run("Loaded") { try await $0.loadState(sessionId: $1, slot: 1) } }
-                menuButton("Continue from auto save") { await run("Continued") { try await $0.loadState(sessionId: $1, slot: 0) } }
-                menuButton(showTouch ? "Hide touch controls" : "Show touch controls") {
-                    showTouch.toggle()
-                    menuOpen = false
-                }
-                menuButton("Quit game") { await quit() }
+            Color.black.opacity(0.7).ignoresSafeArea().onTapGesture { if gameMenu?.capture == nil { closeMenu() } }
+            if let gameMenu {
+                GameMenuView(
+                    title: game.title, heading: gameMenu.heading,
+                    items: gameMenu.items(main: mainItems, close: closeMenu),
+                    focus: Binding(get: { gameMenu.focus }, set: { gameMenu.focus = $0 }),
+                    prompt: gameMenu.capturePrompt, onCancelCapture: gameMenu.cancelCapture)
             }
-            .padding(12)
-            .frame(width: 320)
-            .background(Color(red: 0.082, green: 0.098, blue: 0.133), in: RoundedRectangle(cornerRadius: 16))
+        }
+        .task {
+            // Controller navigation: poll about every frame while the menu is open.
+            let menu = gameMenu ?? GameMenu(controller: controller)
+            menu.api = model.api
+            menu.flash = { flash($0) }
+            menu.open()
+            gameMenu = menu
+            while !Task.isCancelled {
+                menu.poll(main: mainItems, close: closeMenu)
+                try? await Task.sleep(for: .milliseconds(16))
+            }
         }
     }
 
-    private func menuButton(_ label: String, action: @escaping () async -> Void) -> some View {
-        Button { Task { await action() } } label: {
-            Text(label).font(.title3).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.vertical, 10)
-        }
-        .foregroundStyle(.white)
+    private var mainItems: [MenuItem] {
+        [
+            MenuItem(id: "resume", title: "Resume") { closeMenu() },
+            MenuItem(id: "save", title: "Save state (slot 1)") { Task { await run("Saved") { try await $0.saveState(sessionId: $1, slot: 1) } } },
+            MenuItem(id: "load", title: "Load state (slot 1)") { Task { await run("Loaded") { try await $0.loadState(sessionId: $1, slot: 1) } } },
+            MenuItem(id: "continue", title: "Continue from auto save") {
+                Task { await run("Continued") { try await $0.loadState(sessionId: $1, slot: 0) } }
+            },
+            MenuItem(id: "controllers", title: "Controllers", detail: "Players and buttons") { gameMenu?.showControllers() },
+            MenuItem(id: "touch", title: showTouch ? "Hide touch controls" : "Show touch controls") {
+                showTouch.toggle()
+                closeMenu()
+            },
+            MenuItem(id: "quit", title: "Quit game") { Task { await quit() } },
+        ]
+    }
+
+    private func closeMenu() {
+        gameMenu?.markClosed()
+        menuOpen = false
     }
 
     private func run(_ done: String, _ action: (SovEmuAPI, String) async throws -> Void) async {
@@ -104,7 +125,7 @@ struct PlayerView: View {
         } catch {
             flash(error.localizedDescription)
         }
-        menuOpen = false
+        closeMenu()
     }
 
     private func flash(_ text: String) {
@@ -122,9 +143,14 @@ struct PlayerView: View {
             let info = try await api.startSession(gameId: game.id)
             session = info
             controller.analogSticks = system.needsGpu
+            // The user's mappings; a controller without one (or no answer) uses the defaults.
+            if let mappings = try? await api.controllerMappings() { controller.setMappings(mappings) }
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
             s.onState = { state in if state == .failed { status = "Connection failed" } }
-            s.onMenu = { menuOpen = true }
+            s.onMenu = {
+                // The press that just closed the menu (Escape, Home) must not reopen it.
+                if !menuOpen && Date().timeIntervalSince(gameMenu?.closedAt ?? .distantPast) > 0.3 { menuOpen = true }
+            }
             stream = s
             try await s.connect()
             status = ""

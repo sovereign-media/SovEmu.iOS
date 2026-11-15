@@ -14,7 +14,10 @@ paths:
 - **The wire protocol is shared.** `SovEmuKit/Protocol.swift` mirrors `SovEmu.Protocol/src/input.rs`,
   `SovEmu.Web/src/lib/protocol.ts` and SovEmu.Android's `Protocol.kt` byte for byte;
   `ProtocolTests` uses the same vectors. Change all four in the same release.
-- **Controller buttons map by position** (bottom face = RetroPad B, right = A), matching the other
-  clients. GameController's `buttonA` is the bottom face.
+- **Controllers follow SovEmu's `docs/CONTROLLERS.md`** (IDs, families, positional input names,
+  keyboard `KeyboardEvent.code` names, default mappings, hotkeys, players), like the other
+  clients. The logic is plain Swift in `SovEmuKit/Controllers.swift` with tests; the app only
+  reads GameController into it. Defaults map by position (GameController's `buttonA`, the bottom
+  face, is `south` = RetroPad B).
 - Signalling is one POST of the complete offer (wait for ICE gathering), as on the other clients.
 - Before a PR: `swift test` in `Packages/SovEmuKit`, then `xcodegen generate` and a simulator build.
