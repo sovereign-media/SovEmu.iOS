@@ -97,36 +97,106 @@ struct APITests {
     }
 
     @Test func sendsAndReadsControllerMappings() throws {
-        #expect(Documents.controllerMappings.contains("controllerMappings { controller name bindings { input button } source }"))
-        #expect(Documents.saveControllerMapping.contains("$bindings: [BindingInput!]!"))
-        #expect(Documents.saveControllerMapping.contains("saveControllerMapping(controller: $controller, name: $name, bindings: $bindings)"))
-        #expect(Documents.resetControllerMapping.contains("resetControllerMapping(controller: $controller)"))
+        #expect(Documents.controllerMappings.contains("query ControllerMappings($system: ID) { controllerMappings(system: $system) {"))
+        #expect(Documents.controllerMappings.contains("{ controller system name bindings { input button } source }"))
+        #expect(Documents.saveControllerMapping.contains("$system: ID, $name: String!, $bindings: [BindingInput!]!"))
+        #expect(Documents.saveControllerMapping.contains(
+            "saveControllerMapping(controller: $controller, system: $system, name: $name, bindings: $bindings)"))
+        #expect(Documents.resetControllerMapping.contains("($controller: String!, $system: ID)"))
+        #expect(Documents.resetControllerMapping.contains("resetControllerMapping(controller: $controller, system: $system)"))
 
         // Bindings go as a list of objects with the schema's field names.
         let variables = SovEmuAPI.mappingVariables(
-            controller: "dualsense", name: "DualSense Wireless Controller",
+            controller: "dualsense", system: "megadrive", name: "DualSense Wireless Controller",
             bindings: [ControllerBinding(input: "south", button: "A"), ControllerBinding(input: "east", button: "B")])
         let request = try SovEmuAPI.request(baseURL: base, query: Documents.saveControllerMapping, variables: variables)
         let sent = try #require(try body(request)["variables"] as? [String: Any])
         #expect(sent["controller"] as? String == "dualsense")
+        #expect(sent["system"] as? String == "megadrive")
         #expect(sent["name"] as? String == "DualSense Wireless Controller")
         #expect(sent["bindings"] as? [[String: String]] == [["input": "south", "button": "A"], ["input": "east", "button": "B"]])
 
         let mappings = try decode([ControllerMapping].self, "controllerMappings", """
-            {"data":{"controllerMappings":[{"controller":"keyboard","name":"Keyboard",
+            {"data":{"controllerMappings":[{"controller":"keyboard","system":null,"name":"Keyboard",
              "bindings":[{"input":"KeyP","button":"START"}],"source":"USER"},
-             {"controller":"xbox","name":"Xbox","bindings":[],"source":"ENVIRONMENT"},
+             {"controller":"xbox","system":"megadrive","name":"Xbox","bindings":[],"source":"ENVIRONMENT"},
              {"controller":"dualsense","name":"DualSense","bindings":[],"source":"SOMETHING_NEW"}]}}
             """)
         #expect(mappings[0] == ControllerMapping(
             controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")], source: .user))
         #expect(mappings.map(\.source) == [.user, .environment, .admin])
+        #expect(mappings.map(\.system) == [nil, "megadrive", nil], "a missing system is every system")
         #expect(!mappings[0].source.isDefault && mappings[1].source.isDefault)
         #expect(try decode(Bool.self, "resetControllerMapping", #"{"data":{"resetControllerMapping":false}}"#) == false)
 
         let invalid = #"{"data":null,"errors":[{"message":"a controller ID is up to 64 lowercase letters","extensions":{"code":"BAD_REQUEST"}}]}"#
         let error = try #require(throws: APIError.self) { try decode(ControllerMapping.self, "saveControllerMapping", invalid) }
         #expect(error.code == "BAD_REQUEST")
+    }
+
+    @Test func sendsSystemsAsStringsOrNull() throws {
+        // Every system is an explicit null, for saving, resetting and listing alike.
+        let every = SovEmuAPI.mappingVariables(controller: "xbox", system: nil, name: "", bindings: [])
+        let request = try SovEmuAPI.request(baseURL: base, query: Documents.saveControllerMapping, variables: every)
+        let sent = try #require(try body(request)["variables"] as? [String: Any])
+        #expect(sent["system"] is NSNull)
+        #expect((sent["bindings"] as? [Any])?.isEmpty == true)
+
+        #expect(SovEmuAPI.resetVariables(controller: "xbox", system: "snes") == ["controller": .string("xbox"), "system": .string("snes")])
+        #expect(SovEmuAPI.resetVariables(controller: "xbox", system: nil) == ["controller": .string("xbox"), "system": .null])
+        let reset = try SovEmuAPI.request(
+            baseURL: base, query: Documents.resetControllerMapping, variables: SovEmuAPI.resetVariables(controller: "xbox", system: nil))
+        let resetBody = try #require(reset.httpBody)
+        let raw = try #require(String(data: resetBody, encoding: .utf8))
+        #expect(raw.contains(#""system":null"#))
+        #expect(MappingScope.system("megadrive").systemArgument == "megadrive")
+        #expect(MappingScope.everySystem.systemArgument == nil)
+    }
+
+    @Test func decodesSystemControlsAndLayouts() throws {
+        #expect(Documents.controls.contains("system(id: $system) { controls { buttons { button label }"))
+        #expect(Documents.controls.contains("controllerLayouts { id name width height body { x y w h r tone } keys { key label x y w h r } }"))
+
+        let info = try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(Fixtures.megadriveControls.utf8), status: 200)
+        let controls = try #require(info.controls)
+        // The Mega Drive's A, B and C are RetroPad Y, B and A.
+        let labels = Dictionary(uniqueKeysWithValues: controls.buttons.map { ($0.button, $0.label) })
+        #expect(labels["Y"] == "A" && labels["B"] == "B" && labels["A"] == "C")
+        #expect(controls.buttons.prefix(4).map(\.button) == ["UP", "DOWN", "LEFT", "RIGHT"], "directions first")
+        // Lists name the D-pad in words; the diagram draws arrows. Both come from the server.
+        #expect(controls.buttons.prefix(4).map(\.label) == ["Up", "Down", "Left", "Right"])
+        #expect(controls.layout.keys.first { $0.key == "UP" }?.label == "↑")
+        #expect(controls.buttons.allSatisfy { $0.retroButton != nil })
+        #expect(controls.layout.id == "megadrive" && controls.layout.width == 160 && controls.layout.height == 100)
+        #expect(!controls.layout.body.isEmpty)
+        #expect(Set(controls.layout.keys.map(\.key)) == Set(controls.buttons.map(\.button)), "every button is drawn")
+
+        #expect(info.controllerLayouts.map(\.id) == ["xbox", "playstation", "nintendo", "generic"])
+        let ps = try #require(info.layout(for: .playstation))
+        #expect(ps.keys.first { $0.key == "south" }?.label == "✕")
+        #expect(Set(ps.keys.map(\.key)) == Set(PadInput.allCases.map(\.rawValue)))
+        #expect(info.layout(for: .generic)?.id == "generic")
+        let shape = try #require(ps.body.first)
+        #expect(shape.tone == 0 && shape.r > 0)
+
+        // An unknown system has no controls; the controllers' diagrams still come.
+        let none = try SovEmuAPI.decodeData(
+            ControlsInfo.self, from: Data(#"{"data":{"system":null,"controllerLayouts":[]}}"#.utf8), status: 200)
+        #expect(none.controls == nil && none.layout(for: .xbox) == nil)
+        let failed = #"{"data":null,"errors":[{"message":"sign in first","extensions":{"code":"UNAUTHENTICATED"}}]}"#
+        let error = try #require(throws: APIError.self) { try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(failed.utf8), status: 200) }
+        #expect(error.isUnauthenticated)
+    }
+
+    @Test func cropsDiagramsToWhatIsDrawn() throws {
+        let info = try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(Fixtures.megadriveControls.utf8), status: 200)
+        // The Mega Drive's body is (10, 28, 140, 52), its Mode key tops out at y 23.
+        let md = try #require(info.controls?.layout).visibleBounds
+        #expect(md.x == 7 && md.y == 20 && md.w == 146 && md.h == 63)
+        // Never past the canvas, and the whole canvas when nothing is drawn.
+        let edge = PadLayout(id: "t", name: "t", body: [PadShape(x: 1, y: 90, w: 159, h: 10, r: 0)], keys: [])
+        #expect(edge.visibleBounds == (0, 87, 160, 13))
+        #expect(PadLayout(id: "t", name: "t", body: [], keys: []).visibleBounds == (0, 0, 160, 100))
     }
 
     @Test func throwsTheFirstErrorWithItsCode() throws {

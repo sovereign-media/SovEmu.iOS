@@ -122,22 +122,135 @@ public enum MappingSource: String, Codable, Sendable {
     }
 }
 
-/// The mapping in force for one controller model: the user's own, else the server's default.
+/// The mapping in force for one controller model, on one system or on every system: the
+/// user's own, else the server's default.
 public struct ControllerMapping: Codable, Sendable, Equatable {
     /// `keyboard`, a known model (`xbox`, `dualsense` …) or `pad:name:<slug>`.
     public let controller: String
+    /// The system it is for, or nil for every system.
+    public let system: String?
     public let name: String
     public let bindings: [ControllerBinding]
     public let source: MappingSource
 
-    public init(controller: String, name: String, bindings: [ControllerBinding], source: MappingSource) {
+    public init(controller: String, system: String? = nil, name: String, bindings: [ControllerBinding], source: MappingSource) {
         self.controller = controller
+        self.system = system
         self.name = name
         self.bindings = bindings
         self.source = source
     }
 
-    static let fields = "controller name bindings { \(ControllerBinding.fields) } source"
+    static let fields = "controller system name bindings { \(ControllerBinding.fields) } source"
+}
+
+// MARK: - Controls and diagrams (`System.controls`, `controllerLayouts`)
+
+/// A rounded rectangle on a diagram; a circle when `r` is half its width and height.
+public struct PadShape: Codable, Sendable, Equatable {
+    public let x: Double, y: Double, w: Double, h: Double, r: Double
+    /// 0 the body, 1 a recess drawn darker (a screen, a stick's well).
+    public let tone: Int
+
+    public init(x: Double, y: Double, w: Double, h: Double, r: Double, tone: Int = 0) {
+        (self.x, self.y, self.w, self.h, self.r, self.tone) = (x, y, w, h, r, tone)
+    }
+}
+
+/// A button on a diagram.
+public struct PadKey: Codable, Sendable, Equatable {
+    /// A RetroPad button (`B`, `START` …) on a system's pad, an input name (`south` …) on a
+    /// controller's.
+    public let key: String
+    /// What the pad prints on it.
+    public let label: String
+    public let x: Double, y: Double, w: Double, h: Double, r: Double
+
+    public init(key: String, label: String, x: Double, y: Double, w: Double, h: Double, r: Double) {
+        (self.key, self.label, self.x, self.y, self.w, self.h, self.r) = (key, label, x, y, w, h, r)
+    }
+}
+
+/// A pad, drawn from shapes on a `width`×`height` canvas (160×100).
+public struct PadLayout: Codable, Sendable, Equatable {
+    /// A system id, or a controller family (`xbox`, `playstation`, `nintendo`, `generic`).
+    public let id: String
+    public let name: String
+    public let width: Double
+    public let height: Double
+    public let body: [PadShape]
+    public let keys: [PadKey]
+
+    public init(id: String, name: String, width: Double = 160, height: Double = 100, body: [PadShape], keys: [PadKey]) {
+        (self.id, self.name, self.width, self.height, self.body, self.keys) = (id, name, width, height, body, keys)
+    }
+
+    static let fields = "id name width height body { x y w h r tone } keys { key label x y w h r }"
+
+    /// The part of the canvas worth drawing: the bounding box of every shape and key, 3 units
+    /// wider all round, within the canvas (as the web client crops), so a flat pad does not
+    /// float in empty space. The whole canvas when nothing is drawn.
+    public var visibleBounds: (x: Double, y: Double, w: Double, h: Double) {
+        let rects = body.map { ($0.x, $0.y, $0.w, $0.h) } + keys.map { ($0.x, $0.y, $0.w, $0.h) }
+        guard !rects.isEmpty else { return (0, 0, width, height) }
+        let pad = 3.0
+        let x0 = max(0, rects.map(\.0).min()! - pad)
+        let y0 = max(0, rects.map(\.1).min()! - pad)
+        let x1 = min(width, rects.map { $0.0 + $0.2 }.max()! + pad)
+        let y1 = min(height, rects.map { $0.1 + $0.3 }.max()! + pad)
+        return (x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// One of a system's buttons: the RetroPad button that drives it and what the console calls it.
+public struct SystemButton: Codable, Sendable, Equatable {
+    /// A `PadButton`: `B`, `START` …
+    public let button: String
+    public let label: String
+
+    public init(button: String, label: String) {
+        self.button = button
+        self.label = label
+    }
+
+    public var retroButton: RetroButton? { RetroButton(name: button) }
+}
+
+/// A system's buttons, in the order to list them, and its pad's diagram.
+public struct SystemControls: Codable, Sendable, Equatable {
+    public let buttons: [SystemButton]
+    public let layout: PadLayout
+
+    public init(buttons: [SystemButton], layout: PadLayout) {
+        self.buttons = buttons
+        self.layout = layout
+    }
+}
+
+/// What the remap screen draws: the system's controls (nil for an unknown system) and the
+/// controllers' diagrams by family.
+public struct ControlsInfo: Decodable, Sendable, Equatable {
+    public let controls: SystemControls?
+    public let controllerLayouts: [PadLayout]
+
+    public init(controls: SystemControls?, controllerLayouts: [PadLayout]) {
+        self.controls = controls
+        self.controllerLayouts = controllerLayouts
+    }
+
+    enum CodingKeys: String, CodingKey { case system, controllerLayouts }
+    struct SystemField: Decodable { let controls: SystemControls }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        controls = try c.decodeIfPresent(SystemField.self, forKey: .system)?.controls
+        controllerLayouts = try c.decode([PadLayout].self, forKey: .controllerLayouts)
+    }
+
+    /// The diagram for a controller family, else the generic one.
+    public func layout(for family: ControllerFamily) -> PadLayout? {
+        controllerLayouts.first { $0.id == family.rawValue } ?? controllerLayouts.first { $0.id == ControllerFamily.generic.rawValue }
+    }
 }
 
 public struct ClientConfig: Codable, Sendable {
@@ -172,6 +285,7 @@ public enum GraphQLValue: Encodable, Sendable, Equatable {
     case bool(Bool)
     case list([GraphQLValue])
     case object([String: GraphQLValue])
+    case null
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
@@ -181,6 +295,7 @@ public enum GraphQLValue: Encodable, Sendable, Equatable {
         case .bool(let v): try c.encode(v)
         case .list(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
+        case .null: try c.encodeNil()
         }
     }
 }
@@ -222,13 +337,20 @@ enum Documents {
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
     static let saveState = "mutation SaveState($sessionId: ID!, $slot: Int!) { saveState(sessionId: $sessionId, slot: $slot) }"
     static let loadState = "mutation LoadState($sessionId: ID!, $slot: Int!) { loadState(sessionId: $sessionId, slot: $slot) }"
-    static let controllerMappings = "query ControllerMappings { controllerMappings { \(ControllerMapping.fields) } }"
+    static let controllerMappings = """
+        query ControllerMappings($system: ID) { controllerMappings(system: $system) { \(ControllerMapping.fields) } }
+        """
     static let saveControllerMapping = """
-        mutation SaveControllerMapping($controller: String!, $name: String!, $bindings: [BindingInput!]!) { \
-        saveControllerMapping(controller: $controller, name: $name, bindings: $bindings) { \(ControllerMapping.fields) } }
+        mutation SaveControllerMapping($controller: String!, $system: ID, $name: String!, $bindings: [BindingInput!]!) { \
+        saveControllerMapping(controller: $controller, system: $system, name: $name, bindings: $bindings) { \(ControllerMapping.fields) } }
         """
     static let resetControllerMapping = """
-        mutation ResetControllerMapping($controller: String!) { resetControllerMapping(controller: $controller) }
+        mutation ResetControllerMapping($controller: String!, $system: ID) { \
+        resetControllerMapping(controller: $controller, system: $system) }
+        """
+    static let controls = """
+        query Controls($system: ID!) { system(id: $system) { controls { buttons { button label } \
+        layout { \(PadLayout.fields) } } } controllerLayouts { \(PadLayout.fields) } }
         """
 }
 
@@ -277,6 +399,27 @@ public final class SovEmuAPI: Sendable {
         return value
     }
 
+    /// Decodes an answer's whole `data`, or throws its first error.
+    static func decodeData<T: Decodable>(_ type: T.Type, from data: Data, status: Int) throws -> T {
+        let response: GraphQLResponse<T>
+        do {
+            response = try JSONDecoder().decode(GraphQLResponse<T>.self, from: data)
+        } catch {
+            if !(200..<300).contains(status) {
+                throw APIError(status: status, message: HTTPURLResponse.localizedString(forStatusCode: status))
+            }
+            if let failure = try? JSONDecoder().decode(GraphQLResponse<JSONNull>.self, from: data).errors?.first {
+                throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
+            }
+            throw APIError(status: status, message: "The server's answer could not be read.")
+        }
+        if let failure = response.errors?.first {
+            throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
+        }
+        guard let value = response.data else { throw APIError(status: status, message: "The server's answer had no data.") }
+        return value
+    }
+
     /// Sends one operation and returns its root `field`.
     private func post<T: Decodable>(
         _ query: String, _ variables: [String: GraphQLValue] = [:], field: String, as type: T.Type = T.self
@@ -316,30 +459,51 @@ public final class SovEmuAPI: Sendable {
         _ = try await post(Documents.loadState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "loadState", as: Bool.self)
     }
 
-    /// The mappings in force for this user: their own, else the server's default for the
-    /// model. A model missing from the list uses the client's built-in defaults.
-    public func controllerMappings() async throws -> [ControllerMapping] {
-        try await post(Documents.controllerMappings, field: "controllerMappings")
+    /// The mappings in force for this user on a system (nil: on every system), one per model:
+    /// their own for the system, their own for every system, the default for the system, the
+    /// default for every system. A model missing from the list uses the built-in defaults.
+    public func controllerMappings(system: String?) async throws -> [ControllerMapping] {
+        try await post(Documents.controllerMappings, ["system": Self.system(system)], field: "controllerMappings")
     }
-    /// Saves a controller model's mapping, replacing its defaults wherever this user plays.
+    /// Saves a controller model's mapping for a system (nil: every system).
     @discardableResult
-    public func saveControllerMapping(controller: String, name: String, bindings: [ControllerBinding]) async throws -> ControllerMapping {
-        try await post(Documents.saveControllerMapping, Self.mappingVariables(controller: controller, name: name, bindings: bindings),
-                       field: "saveControllerMapping")
+    public func saveControllerMapping(controller: String, system: String?, name: String, bindings: [ControllerBinding]) async throws
+        -> ControllerMapping
+    {
+        try await post(
+            Documents.saveControllerMapping,
+            Self.mappingVariables(controller: controller, system: system, name: name, bindings: bindings),
+            field: "saveControllerMapping")
     }
-    /// Removes the user's own mapping for a model; returns whether it had one. What then applies
-    /// (a server default, or the built-in one) comes from `controllerMappings` again.
+    /// Removes the user's own mapping for a model on a system (nil: every system); returns
+    /// whether it had one. What then applies comes from `controllerMappings` again.
     @discardableResult
-    public func resetControllerMapping(controller: String) async throws -> Bool {
-        try await post(Documents.resetControllerMapping, ["controller": .string(controller)], field: "resetControllerMapping")
+    public func resetControllerMapping(controller: String, system: String?) async throws -> Bool {
+        try await post(Documents.resetControllerMapping, Self.resetVariables(controller: controller, system: system),
+                       field: "resetControllerMapping")
+    }
+    /// A system's buttons and pad, and the controllers' diagrams.
+    public func controls(system: String) async throws -> ControlsInfo {
+        let request = try Self.request(baseURL: baseURL, query: Documents.controls, variables: ["system": .string(system)])
+        let (data, response) = try await session.data(for: request)
+        return try Self.decodeData(ControlsInfo.self, from: data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
 
-    static func mappingVariables(controller: String, name: String, bindings: [ControllerBinding]) -> [String: GraphQLValue] {
+    static func system(_ system: String?) -> GraphQLValue { system.map(GraphQLValue.string) ?? .null }
+
+    static func mappingVariables(controller: String, system: String?, name: String, bindings: [ControllerBinding])
+        -> [String: GraphQLValue]
+    {
         [
             "controller": .string(controller),
+            "system": Self.system(system),
             "name": .string(name),
             "bindings": .list(bindings.map { .object(["input": .string($0.input), "button": .string($0.button)]) }),
         ]
+    }
+
+    static func resetVariables(controller: String, system: String?) -> [String: GraphQLValue] {
+        ["controller": .string(controller), "system": Self.system(system)]
     }
 }
 
@@ -348,10 +512,12 @@ struct JSONNull: Decodable {
     init(from decoder: Decoder) throws {}
 }
 
-/// The mapping calls `MappingStore` needs (`SovEmuAPI`, or a stand-in in tests).
+/// The mapping calls `Mappings` needs (`SovEmuAPI`, or a stand-in in tests).
 public protocol ControllerMappingService: Sendable {
-    func controllerMappings() async throws -> [ControllerMapping]
-    func resetControllerMapping(controller: String) async throws -> Bool
+    func controllerMappings(system: String?) async throws -> [ControllerMapping]
+    func saveControllerMapping(controller: String, system: String?, name: String, bindings: [ControllerBinding]) async throws
+        -> ControllerMapping
+    func resetControllerMapping(controller: String, system: String?) async throws -> Bool
 }
 
 extension SovEmuAPI: ControllerMappingService {}

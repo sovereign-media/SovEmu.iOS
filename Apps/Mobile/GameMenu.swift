@@ -16,8 +16,10 @@ struct MenuItem: Identifiable {
 /// The in-game menu's pages and the controller-driven navigation through them: the D-pad (or
 /// left stick, or arrow keys) moves, south (or Enter, Space) confirms, east (or Escape) goes
 /// back. The Controllers page lists the connected devices with their players; a device's page
-/// changes its player and rebinds each RetroPad button by pressing an input on that device.
-/// Mappings are saved to the server (`saveControllerMapping`); players are not saved.
+/// changes its player, chooses the scope (this system, or all systems) and rebinds each of the
+/// system's buttons, by its own label, by pressing an input on that device, with the system's
+/// pad and the player's controller drawn side by side. Mappings are saved to the server
+/// (`saveControllerMapping`, with `system` for this system); players are not saved.
 @Observable
 final class GameMenu {
     enum Page: Equatable {
@@ -30,6 +32,8 @@ final class GameMenu {
         let device: Controller.DeviceKey
         let identity: ControllerIdentity
         let button: RetroButton
+        /// The button as the row names it ("C").
+        let label: String
         let started = Date()
 
         var cancelInput: String { identity.isKeyboard ? KeyNames.menu : PadInput.east.rawValue }
@@ -38,8 +42,13 @@ final class GameMenu {
     static let captureTimeout: TimeInterval = 8
     static let holdToBind: TimeInterval = 1
 
-    /// The order buttons are listed in for remapping.
-    static let buttons: [RetroButton] = [.b, .a, .y, .x, .l, .r, .l2, .r2, .l3, .r3, .select, .start, .up, .down, .left, .right]
+    /// What the device page draws above its rows.
+    struct Diagrams {
+        let system: PadLayout?
+        /// Nil for a keyboard, which shows key names instead.
+        let controller: PadLayout?
+        let highlight: DiagramHighlight
+    }
 
     private(set) var page: Page = .main
     var focus = 0
@@ -49,7 +58,16 @@ final class GameMenu {
     private var revision = 0
     private(set) var closedAt = Date.distantPast
 
+    /// Which mappings the device page edits: this system's (the default) or every system's.
+    private(set) var scope: MappingScope = .everySystem
+
     @ObservationIgnored let controller: Controller
+    /// The system being played: its id and short name.
+    @ObservationIgnored var system: (id: String, short: String) = ("", "") {
+        didSet { scope = .system(system.id) }
+    }
+    /// Its buttons and pad, and the controllers' diagrams (nil until they load, or if not).
+    @ObservationIgnored var info: ControlsInfo?
     @ObservationIgnored var api: SovEmuAPI?
     @ObservationIgnored var flash: (String) -> Void = { _ in }
     @ObservationIgnored private var watchers: [Controller.DeviceKey: PressWatcher] = [:]
@@ -107,23 +125,31 @@ final class GameMenu {
         case .device(let key):
             guard let device = devices.first(where: { $0.key == key }) else { return [] }
             let identity = device.identity
-            let mapping = controller.mapping(for: identity.id)
+            let mappings = controller.mappings
+            let mapping = mappings.mapping(for: identity.id, in: scope)
             let family: ControllerFamily? = identity.isKeyboard ? nil : identity.family
             var rows = [
                 MenuItem(
+                    id: "scope", title: "Mapping for", detail: scopeName(scope),
+                    action: { [weak self] in self?.toggleScope() },
+                    adjust: { [weak self] _ in self?.toggleScope() }),
+                MenuItem(
                     id: "player", title: "Player \(device.port + 1)", detail: "◀ ▶ to change",
                     action: { [weak self] in self?.move(device, by: device.port == WireProtocol.maxPorts - 1 ? -device.port : 1) },
-                    adjust: { [weak self] delta in self?.move(device, by: delta) })
+                    adjust: { [weak self] delta in self?.move(device, by: delta) }),
             ]
-            for button in Self.buttons {
+            // The system's buttons by its labels ("C" on a Mega Drive is RetroPad A); for every
+            // system, all sixteen by RetroPad name.
+            for entry in remapButtons(info?.controls, scope: scope) {
+                guard let button = entry.retroButton else { continue }
                 let inputs = mapping.inputs(for: button).map { inputLabel($0, family: family) }
                 rows.append(MenuItem(
-                    id: button.name, title: Self.title(button),
-                    detail: inputs.isEmpty ? "—" : inputs.joined(separator: ", "),
-                    action: { [weak self] in self?.startCapture(device, button) }))
+                    id: button.name, title: entry.label,
+                    detail: "←  " + (inputs.isEmpty ? "—" : inputs.joined(separator: ", ")),
+                    action: { [weak self] in self?.startCapture(device, button, label: entry.label) }))
             }
-            // Only the user's own mapping can be reset; a default is already in force.
-            if controller.source(for: identity.id) == .user {
+            // Only the user's own mapping in this scope can be reset; a default is in force.
+            if mappings.canReset(identity.id, in: scope) {
                 rows.append(MenuItem(id: "reset", title: "Reset to defaults", action: { [weak self] in self?.reset(identity) }))
             }
             rows.append(MenuItem(id: "back", title: "Back", action: { [weak self] in self?.show(.controllers) }))
@@ -137,31 +163,34 @@ final class GameMenu {
         case .controllers: devices.isEmpty ? "No controller or keyboard connected. The touch controls are player 1." : "Controllers"
         case .device(let key):
             devices.first { $0.key == key }.map { device in
-                let source = controller.source(for: device.identity.id) == .user ? "Yours" : "Default"
-                return "\(device.identity.name) (\(device.identity.id)) · \(source)"
+                let origin = controller.mappings.origin(for: device.identity.id, in: scope)
+                return "\(device.identity.name) · \(origin.text)"
             }
         }
     }
 
-    /// What the capture overlay says.
+    /// What the capture overlay says (docs/CONTROLLERS.md, Remapping).
     var capturePrompt: String? {
         guard let capture else { return nil }
-        let device = capture.identity.isKeyboard ? "the keyboard" : capture.identity.name
-        let cancel = capture.identity.isKeyboard ? "Esc" : capture.identity.family.label(.east)
-        return "Press an input on \(device) for \(Self.title(capture.button)).\n"
-            + "Tap \(cancel) to cancel, or hold it to bind \(cancel)."
+        let what = capture.identity.isKeyboard ? "Press a key" : "Press a button on \(capture.identity.name)"
+        let back = capture.identity.isKeyboard ? "Esc" : capture.identity.family.label(.east)
+        return "\(what) for \(capture.label)\n· tap \(back) to cancel, hold it to bind it"
     }
 
-    static func title(_ button: RetroButton) -> String {
-        switch button {
-        case .select: "Select"
-        case .start: "Start"
-        case .up: "Up"
-        case .down: "Down"
-        case .left: "Left"
-        case .right: "Right"
-        default: button.name
-        }
+    func scopeName(_ scope: MappingScope) -> String {
+        scope == .everySystem ? "All systems" : "This system (\(system.short))"
+    }
+
+    /// The diagrams for the device page, lighting the focused button's keys.
+    func diagrams(_ rows: [MenuItem]) -> Diagrams? {
+        guard case .device(let key) = page, let device = devices.first(where: { $0.key == key }) else { return nil }
+        let focused = rows.indices.contains(focus) ? RetroButton(name: rows[focus].id) : nil
+        let button = capture?.button ?? focused
+        let mapping = controller.mappings.mapping(for: device.identity.id, in: scope)
+        let systemLayout = scope == .everySystem ? nil : info?.controls?.layout
+        let controllerLayout = device.identity.isKeyboard ? nil : info?.layout(for: device.identity.family)
+        guard systemLayout != nil || controllerLayout != nil else { return nil }
+        return Diagrams(system: systemLayout, controller: controllerLayout, highlight: DiagramHighlight(button: button, mapping: mapping))
     }
 
     // MARK: Actions
@@ -172,11 +201,15 @@ final class GameMenu {
         devices = controller.devices()
     }
 
-    func startCapture(_ device: Controller.Device, _ button: RetroButton) {
+    private func toggleScope() {
+        scope = scope == .everySystem ? .system(system.id) : .everySystem
+    }
+
+    func startCapture(_ device: Controller.Device, _ button: RetroButton, label: String) {
         let held = controller.held()[device.key] ?? []
         captureWatcher = PressWatcher(holding: held)
         cancelDown = nil
-        capture = Capture(device: device.key, identity: device.identity, button: button)
+        capture = Capture(device: device.key, identity: device.identity, button: button, label: label)
     }
 
     func cancelCapture() {
@@ -186,16 +219,18 @@ final class GameMenu {
 
     private func bind(_ input: String, _ capture: Capture) {
         let id = capture.identity.id
-        let mapping = controller.mapping(for: id).rebinding(input, to: capture.button)
-        controller.setUser(id, mapping)
+        let scope = scope
+        let mappings = controller.mappings
+        let mapping = mappings.mapping(for: id, in: scope).rebinding(input, to: capture.button)
+        controller.mappings = mappings.applying(mapping, for: id, in: scope)
         cancelCapture()
         revision += 1
         guard let api else { return }
         let name = capture.identity.name
         Task { @MainActor in
             do {
-                let saved = try await api.saveControllerMapping(controller: id, name: name, bindings: mapping.bindingInputs)
-                self.controller.record(saved)
+                // Saved in the scope, then both lists read back: what is in force may change.
+                self.controller.mappings = try await mappings.saving(mapping, for: id, name: name, in: scope, with: api)
                 self.revision += 1
             } catch {
                 self.flash("Not saved: \(error.localizedDescription)")
@@ -203,15 +238,17 @@ final class GameMenu {
         }
     }
 
-    /// Removes the user's own mapping, then uses what the server says is in force: its default
-    /// for the model if it has one, else the built-in defaults.
+    /// Removes the user's own mapping in the scope, then uses what the server says is in force:
+    /// their own for every system, a default for the model, else the built-in defaults.
     private func reset(_ identity: ControllerIdentity) {
         guard let api else { return }
+        let scope = scope
         Task { @MainActor in
             do {
-                self.controller.setMappings(try await MappingStore.reset(identity.id, with: api))
+                self.controller.mappings = try await self.controller.mappings.resetting(identity.id, in: scope, with: api)
                 self.revision += 1
-                self.flash("\(identity.name): back to the defaults")
+                let origin = self.controller.mappings.origin(for: identity.id, in: scope)
+                self.flash("\(identity.name) (\(self.scopeName(scope))): now \(origin.text.lowercased())")
             } catch {
                 self.flash("Not reset: \(error.localizedDescription)")
             }
@@ -322,6 +359,7 @@ struct GameMenuView: View {
     let heading: String?
     let items: [MenuItem]
     @Binding var focus: Int
+    var diagrams: GameMenu.Diagrams?
     let prompt: String?
     let onCancelCapture: () -> Void
 
@@ -330,6 +368,9 @@ struct GameMenuView: View {
             Text(title).font(.subheadline).foregroundStyle(.secondary).padding(8)
             if let heading {
                 Text(heading).font(.headline).foregroundStyle(.white).padding(.horizontal, 12).padding(.bottom, 4)
+            }
+            if let diagrams {
+                DiagramPair(diagrams: diagrams).frame(maxWidth: .infinity).padding(.bottom, 6)
             }
             ScrollViewReader { proxy in
                 ScrollView {
@@ -350,8 +391,8 @@ struct GameMenuView: View {
             }
         }
         .padding(12)
-        .frame(width: 380)
-        .frame(maxHeight: 520)
+        .frame(maxWidth: diagrams == nil ? 380 : 460)
+        .frame(maxHeight: diagrams == nil ? 520 : 640)
         .fixedSize(horizontal: false, vertical: true)
         .background(Color(red: 0.082, green: 0.098, blue: 0.133), in: RoundedRectangle(cornerRadius: 16))
         .overlay {

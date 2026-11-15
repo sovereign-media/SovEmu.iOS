@@ -41,9 +41,13 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
   the lowest free player, a disconnected one frees it). The keyboard and the touch controls are
   player 1.
 - **Remapping:** in-game menu → Controllers. Change a device's player (for this session), or
-  pick a RetroPad button and press the input to bind (tap B/○/A or Escape to cancel; hold it to
-  bind that button itself). Mappings are saved to your account per controller model, so they
-  follow you to the other clients; "Reset to defaults" removes one.
+  remap it for **this system** (its buttons by the console's own labels: a Mega Drive's A, B, C)
+  or for **all systems** (the sixteen RetroPad buttons), with the console's pad and your
+  controller drawn side by side and the chosen button lit on both. Pick a button and press the
+  input to bind (tap B/○/A or Escape to cancel; hold it to bind that button itself). Mappings
+  are saved to your account per controller model and system, so they follow you to the other
+  clients; the page says whether yours or a default is in force, and "Reset to defaults"
+  removes yours for that scope.
 - **Keyboard:** arrows, Z (B), X (A), A (Y), S (X), Q (L), W (R), Enter (Start), Shift (Select);
   Tab fast-forwards, Backspace rewinds, Escape opens the menu.
 - **In-game menu:** the ☰ button, Select+Start, Home or Escape. A controller drives it: the

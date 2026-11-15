@@ -313,18 +313,23 @@ public struct ControllerMap: Equatable, Sendable {
     }
 }
 
-/// The mappings in force for a user, as `controllerMappings` returns them: their own, else the
-/// server's default for the model. A model the server does not list uses the built-in defaults.
+/// The mappings in force for a user, as `controllerMappings` returns them for one system (or
+/// for every system): one per model, each with where it comes from. A model the server does
+/// not list uses the built-in defaults.
 public struct MappingStore: Sendable, Equatable {
     public struct Entry: Sendable, Equatable {
         public let map: ControllerMap
         public let source: MappingSource
+        /// The system it is for, or nil for every system.
+        public let system: String?
     }
 
     private var entries: [String: Entry]
 
     public init(_ mappings: [ControllerMapping] = []) {
-        entries = Dictionary(mappings.map { ($0.controller, Entry(map: ControllerMap(bindings: $0.bindings), source: $0.source)) }) { $1 }
+        entries = Dictionary(
+            mappings.map { ($0.controller, Entry(map: ControllerMap(bindings: $0.bindings), source: $0.source, system: $0.system)) }
+        ) { $1 }
     }
 
     /// The mapping in force for a controller model.
@@ -333,24 +338,160 @@ public struct MappingStore: Sendable, Equatable {
     }
 
     /// Where it comes from; nil for the built-in defaults.
-    public func source(for controller: String) -> MappingSource? { entries[controller]?.source }
+    public func entry(for controller: String) -> Entry? { entries[controller] }
 
-    /// The user changed a model's mapping (saved, or being saved, as theirs).
-    public mutating func setUser(_ controller: String, _ map: ControllerMap) {
-        entries[controller] = Entry(map: map, source: .user)
+    fileprivate mutating func set(_ controller: String, _ entry: Entry) { entries[controller] = entry }
+}
+
+/// Which mappings a change applies to: this system's, or every system's.
+public enum MappingScope: Equatable, Sendable {
+    case system(String)
+    case everySystem
+
+    /// The `system` argument for saving and resetting: nil for every system.
+    public var systemArgument: String? {
+        if case .system(let id) = self { return id }
+        return nil
+    }
+}
+
+/// Where the mapping in force comes from, as the remap screen says it.
+public enum MappingOrigin: Equatable, Sendable {
+    case yoursForThisSystem, yoursForAllSystems, defaults
+
+    public var text: String {
+        switch self {
+        case .yoursForThisSystem: "Yours for this system"
+        case .yoursForAllSystems: "Yours for all systems"
+        case .defaults: "Default"
+        }
+    }
+}
+
+/// A user's mappings while playing one system: those in force there (what the game uses) and
+/// those for every system (what "All systems" edits), as the server layers them
+/// (docs/CONTROLLERS.md): their own for the system, their own for every system, the default
+/// for the system, the default for every system, the built-in defaults.
+public struct Mappings: Sendable, Equatable {
+    public let system: String
+    /// `controllerMappings(system:)`: in force on this system.
+    public private(set) var inSystem: MappingStore
+    /// `controllerMappings`: in force on every system.
+    public private(set) var everySystem: MappingStore
+
+    public init(system: String, inSystem: MappingStore = MappingStore(), everySystem: MappingStore = MappingStore()) {
+        self.system = system
+        self.inSystem = inSystem
+        self.everySystem = everySystem
     }
 
-    /// What the server answered to a save.
-    public mutating func record(_ mapping: ControllerMapping) {
-        entries[mapping.controller] = Entry(map: ControllerMap(bindings: mapping.bindings), source: mapping.source)
+    /// The mapping in force for a model in play.
+    public func mapping(for controller: String) -> ControllerMap { inSystem.mapping(for: controller) }
+
+    /// The mapping a scope shows and edits.
+    public func mapping(for controller: String, in scope: MappingScope) -> ControllerMap {
+        scope == .everySystem ? everySystem.mapping(for: controller) : inSystem.mapping(for: controller)
     }
 
-    /// Removes the user's own mapping for a model on the server, then reads back every mapping
-    /// in force: the model falls back to the server's default if there is one, and only
-    /// otherwise to the built-in defaults.
-    public static func reset(_ controller: String, with service: some ControllerMappingService) async throws -> MappingStore {
-        _ = try await service.resetControllerMapping(controller: controller)
-        return MappingStore(try await service.controllerMappings())
+    /// Where the mapping a scope shows comes from.
+    public func origin(for controller: String, in scope: MappingScope) -> MappingOrigin {
+        let entry = scope == .everySystem ? everySystem.entry(for: controller) : inSystem.entry(for: controller)
+        guard let entry, entry.source == .user else { return .defaults }
+        return entry.system == nil ? .yoursForAllSystems : .yoursForThisSystem
+    }
+
+    /// Whether the user has their own mapping in exactly this scope, which a reset removes.
+    public func canReset(_ controller: String, in scope: MappingScope) -> Bool {
+        switch scope {
+        case .everySystem: everySystem.entry(for: controller)?.source == .user
+        case .system: origin(for: controller, in: scope) == .yoursForThisSystem
+        }
+    }
+
+    /// The user's change, applied locally before the server answers, by the same layering.
+    public func applying(_ map: ControllerMap, for controller: String, in scope: MappingScope) -> Mappings {
+        var next = self
+        switch scope {
+        case .system(let id):
+            next.inSystem.set(controller, .init(map: map, source: .user, system: id))
+        case .everySystem:
+            next.everySystem.set(controller, .init(map: map, source: .user, system: nil))
+            // The user's own for every system beats any default, not their own for this system.
+            if origin(for: controller, in: .system(system)) != .yoursForThisSystem {
+                next.inSystem.set(controller, .init(map: map, source: .user, system: nil))
+            }
+        }
+        return next
+    }
+
+    /// Both lists from the server.
+    public static func fetch(system: String, with service: some ControllerMappingService) async throws -> Mappings {
+        async let here = service.controllerMappings(system: system)
+        async let everywhere = service.controllerMappings(system: nil)
+        return Mappings(system: system, inSystem: MappingStore(try await here), everySystem: MappingStore(try await everywhere))
+    }
+
+    /// Saves a model's mapping in a scope, then reads both lists again.
+    public func saving(
+        _ map: ControllerMap, for controller: String, name: String, in scope: MappingScope,
+        with service: some ControllerMappingService
+    ) async throws -> Mappings {
+        _ = try await service.saveControllerMapping(
+            controller: controller, system: scope.systemArgument, name: name, bindings: map.bindingInputs)
+        return try await Self.fetch(system: system, with: service)
+    }
+
+    /// Removes the user's own mapping for a model in a scope, then reads both lists again: the
+    /// next layer applies (their own for every system, a server default, else the built-in).
+    public func resetting(_ controller: String, in scope: MappingScope, with service: some ControllerMappingService)
+        async throws -> Mappings
+    {
+        _ = try await service.resetControllerMapping(controller: controller, system: scope.systemArgument)
+        return try await Self.fetch(system: system, with: service)
+    }
+}
+
+// MARK: - Diagrams
+
+/// Which keys to light on the two diagrams while a RetroPad button is chosen: the system pad's
+/// key for the button, and the controller's keys for every input mapped to it.
+public struct DiagramHighlight: Equatable, Sendable {
+    public let systemKeys: Set<String>
+    public let controllerKeys: Set<String>
+
+    public init(button: RetroButton?, mapping: ControllerMap) {
+        guard let button else {
+            systemKeys = []
+            controllerKeys = []
+            return
+        }
+        systemKeys = [button.name]
+        controllerKeys = Set(mapping.inputs(for: button).filter { PadInput(rawValue: $0) != nil })
+    }
+}
+
+/// The rows the remap screen lists for a scope: the system's buttons with its labels (Mega
+/// Drive: `Y` is "A"), or for every system all sixteen by RetroPad name.
+public func remapButtons(_ controls: SystemControls?, scope: MappingScope) -> [SystemButton] {
+    if case .system = scope, let controls {
+        return controls.buttons.filter { $0.retroButton != nil }
+    }
+    let order: [RetroButton] = [.b, .a, .y, .x, .l, .r, .l2, .r2, .l3, .r3, .select, .start, .up, .down, .left, .right]
+    return order.map { SystemButton(button: $0.name, label: $0.displayName) }
+}
+
+extension RetroButton {
+    /// The RetroPad name as a row shows it: `B`, `Select`, `Up` …
+    public var displayName: String {
+        switch self {
+        case .select: "Select"
+        case .start: "Start"
+        case .up: "Up"
+        case .down: "Down"
+        case .left: "Left"
+        case .right: "Right"
+        default: name
+        }
     }
 }
 

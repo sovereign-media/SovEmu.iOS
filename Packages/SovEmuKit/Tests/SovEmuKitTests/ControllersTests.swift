@@ -209,57 +209,149 @@ struct ControllersTests {
         #expect(MenuAction.of("l1") == nil)
     }
 
-    /// A server holding the user's own mappings over its defaults, as `controllerMappings` does.
+    /// A server layering mappings as `controllerMappings(system:)` does: the user's own for the
+    /// system, their own for every system, the default for the system, the default for every
+    /// system. Keys are `controller@system`, with `*` for every system.
     private actor FakeServer: ControllerMappingService {
-        var own: [String: ControllerMapping]
-        let defaults: [String: ControllerMapping]
+        var own: [String: [ControllerBinding]]
+        let defaults: [String: [ControllerBinding]]
         private(set) var calls: [String] = []
 
-        init(own: [ControllerMapping], defaults: [ControllerMapping]) {
-            self.own = Dictionary(uniqueKeysWithValues: own.map { ($0.controller, $0) })
-            self.defaults = Dictionary(uniqueKeysWithValues: defaults.map { ($0.controller, $0) })
+        init(own: [String: ControllerMap], defaults: [String: ControllerMap]) {
+            self.own = own.mapValues(\.bindingInputs)
+            self.defaults = defaults.mapValues(\.bindingInputs)
         }
 
-        func controllerMappings() async throws -> [ControllerMapping] {
-            calls.append("controllerMappings")
-            return Array(defaults.merging(own) { $1 }.values)
+        func controllerMappings(system: String?) async throws -> [ControllerMapping] {
+            calls.append("list \(system ?? "*")")
+            let models = Set((Array(own.keys) + Array(defaults.keys)).map { String($0.split(separator: "@")[0]) })
+            typealias Layer = (scope: String?, source: MappingSource, table: [String: [ControllerBinding]])
+            var layers: [Layer] = []
+            if let system { layers.append((system, .user, own)) }
+            layers.append((nil, .user, own))
+            if let system { layers.append((system, .admin, defaults)) }
+            layers.append((nil, .admin, defaults))
+            return models.compactMap { model in
+                for (scope, source, table) in layers {
+                    if let bindings = table["\(model)@\(scope ?? "*")"] {
+                        return ControllerMapping(controller: model, system: scope, name: model, bindings: bindings, source: source)
+                    }
+                }
+                return nil
+            }
         }
 
-        func resetControllerMapping(controller: String) async throws -> Bool {
-            calls.append("reset \(controller)")
-            return own.removeValue(forKey: controller) != nil
+        func saveControllerMapping(controller: String, system: String?, name: String, bindings: [ControllerBinding]) async throws
+            -> ControllerMapping
+        {
+            calls.append("save \(controller)@\(system ?? "*")")
+            own["\(controller)@\(system ?? "*")"] = bindings
+            return ControllerMapping(controller: controller, system: system, name: name, bindings: bindings, source: .user)
+        }
+
+        func resetControllerMapping(controller: String, system: String?) async throws -> Bool {
+            calls.append("reset \(controller)@\(system ?? "*")")
+            return own.removeValue(forKey: "\(controller)@\(system ?? "*")") != nil
         }
     }
 
-    @Test func resetFallsBackToTheServersDefaultThenTheBuiltIn() async throws {
+    @Test func resetRefetchesSoTheNextLayerApplies() async throws {
         let mine = ControllerMap.pad.rebinding("south", to: .a)
+        let mineEverywhere = ControllerMap.pad.rebinding("west", to: .start)
         let admin = ControllerMap.pad.rebinding("north", to: .start)
         let server = FakeServer(
-            own: [
-                ControllerMapping(controller: "dualsense", name: "DualSense", bindings: mine.bindingInputs, source: .user),
-                ControllerMapping(controller: "keyboard", name: "Keyboard", bindings: [ControllerBinding(input: "KeyP", button: "START")], source: .user),
-            ],
-            defaults: [ControllerMapping(controller: "dualsense", name: "DualSense", bindings: admin.bindingInputs, source: .admin)])
-        let store = MappingStore(try await server.controllerMappings())
-        #expect(store.mapping(for: "dualsense") == mine && store.source(for: "dualsense") == .user)
+            own: ["dualsense@megadrive": mine, "dualsense@*": mineEverywhere, "keyboard@megadrive": ControllerMap.keyboard.rebinding("KeyP", to: .start)],
+            defaults: ["dualsense@megadrive": admin, "xbox@*": admin])
+        let start = try await Mappings.fetch(system: "megadrive", with: server)
+        #expect(start.mapping(for: "dualsense") == mine)
+        #expect(start.origin(for: "dualsense", in: .system("megadrive")) == .yoursForThisSystem)
+        #expect(start.origin(for: "dualsense", in: .everySystem) == .yoursForAllSystems)
+        #expect(start.origin(for: "xbox", in: .system("megadrive")) == .defaults)
+        #expect(start.mapping(for: "xbox") == admin)
 
-        // A model with a server default goes back to it, not to the built-in mapping.
-        let reset = try await MappingStore.reset("dualsense", with: server)
-        #expect(await server.calls == ["controllerMappings", "reset dualsense", "controllerMappings"])
-        #expect(reset.mapping(for: "dualsense") == admin)
-        #expect(reset.source(for: "dualsense") == .admin)
-        #expect(reset.mapping(for: "keyboard").inputs(for: .start) == ["KeyP"], "other models are kept")
+        // Resetting this system's: the user's own for every system comes next, not a default.
+        let first = try await start.resetting("dualsense", in: .system("megadrive"), with: server)
+        // Reset first, then both lists (fetched together, in either order).
+        let calls = await server.calls.suffix(3)
+        #expect(calls.first == "reset dualsense@megadrive")
+        #expect(Set(calls.dropFirst()) == ["list megadrive", "list *"])
+        #expect(first.mapping(for: "dualsense") == mineEverywhere)
+        #expect(first.origin(for: "dualsense", in: .system("megadrive")) == .yoursForAllSystems)
+        #expect(!first.canReset("dualsense", in: .system("megadrive")) && first.canReset("dualsense", in: .everySystem))
 
-        // One without goes back to the built-in defaults.
-        let keyboard = try await MappingStore.reset("keyboard", with: server)
-        #expect(keyboard.mapping(for: "keyboard") == .keyboard)
-        #expect(keyboard.source(for: "keyboard") == nil)
-        #expect(keyboard.mapping(for: "xbox") == .pad)
+        // Then every system's: the system's default (an admin's), not the built-in mapping.
+        let second = try await first.resetting("dualsense", in: .everySystem, with: server)
+        #expect(await server.calls.contains("reset dualsense@*"))
+        #expect(second.mapping(for: "dualsense") == admin)
+        #expect(second.origin(for: "dualsense", in: .system("megadrive")) == .defaults)
+        #expect(second.mapping(for: "dualsense", in: .everySystem) == .pad, "no default for every system: built-in")
+        #expect(second.mapping(for: "keyboard").inputs(for: .start) == ["KeyP"], "other models are kept")
 
-        var edited = keyboard
-        edited.setUser("xbox", mine)
-        #expect(edited.source(for: "xbox") == .user && edited.mapping(for: "xbox") == mine)
-        edited.record(ControllerMapping(controller: "xbox", name: "Xbox", bindings: admin.bindingInputs, source: .user))
-        #expect(edited.mapping(for: "xbox") == admin)
+        // Nothing left at all: the built-in defaults.
+        let third = try await second.resetting("keyboard", in: .system("megadrive"), with: server)
+        #expect(third.mapping(for: "keyboard") == .keyboard)
+        #expect(third.inSystem.entry(for: "keyboard") == nil)
+    }
+
+    @Test func savesInTheChosenScope() async throws {
+        let server = FakeServer(own: [:], defaults: ["xbox@megadrive": ControllerMap.pad.rebinding("north", to: .start)])
+        let start = try await Mappings.fetch(system: "megadrive", with: server)
+        let edit = ControllerMap.pad.rebinding("south", to: .a)
+
+        let everywhere = try await start.saving(edit, for: "xbox", name: "Xbox", in: .everySystem, with: server)
+        #expect(await server.calls.contains("save xbox@*"))
+        // The user's own for every system beats the system's default.
+        #expect(everywhere.mapping(for: "xbox") == edit)
+        #expect(everywhere.origin(for: "xbox", in: .system("megadrive")) == .yoursForAllSystems)
+
+        let here = try await everywhere.saving(.pad, for: "xbox", name: "Xbox", in: .system("megadrive"), with: server)
+        #expect(await server.calls.contains("save xbox@megadrive"))
+        #expect(here.mapping(for: "xbox") == .pad && here.mapping(for: "xbox", in: .everySystem) == edit)
+        #expect(here.origin(for: "xbox", in: .system("megadrive")) == .yoursForThisSystem)
+    }
+
+    @Test func appliesChangesLocallyByTheSameLayers() {
+        var m = Mappings(system: "snes")
+        let edit = ControllerMap.pad.rebinding("south", to: .a)
+        m = m.applying(edit, for: "xbox", in: .everySystem)
+        #expect(m.mapping(for: "xbox") == edit && m.origin(for: "xbox", in: .system("snes")) == .yoursForAllSystems)
+        m = m.applying(.pad, for: "xbox", in: .system("snes"))
+        #expect(m.mapping(for: "xbox") == .pad && m.origin(for: "xbox", in: .system("snes")) == .yoursForThisSystem)
+        // A later every-system change does not override this system's own.
+        m = m.applying(edit, for: "xbox", in: .everySystem)
+        #expect(m.mapping(for: "xbox") == .pad && m.mapping(for: "xbox", in: .everySystem) == edit)
+    }
+
+    @Test func namesScopesAndOrigins() {
+        #expect(MappingOrigin.yoursForThisSystem.text == "Yours for this system")
+        #expect(MappingOrigin.yoursForAllSystems.text == "Yours for all systems")
+        #expect(MappingOrigin.defaults.text == "Default")
+        let m = Mappings(system: "nes")
+        #expect(m.origin(for: "xbox", in: .system("nes")) == .defaults, "built-in is a default")
+        #expect(!m.canReset("xbox", in: .system("nes")) && !m.canReset("xbox", in: .everySystem))
+    }
+
+    @Test func highlightsTheButtonOnBothDiagrams() {
+        // Mega Drive "C" is RetroPad A; by default south (✕) drives B and east drives A.
+        let lit = DiagramHighlight(button: .a, mapping: .pad)
+        #expect(lit.systemKeys == ["A"] && lit.controllerKeys == ["east"])
+        let two = ControllerMap.pad.rebinding("south", to: .a)
+        let both = ControllerMap(two.bindings.merging(["r1": .a]) { $1 })
+        #expect(DiagramHighlight(button: .a, mapping: both).controllerKeys == ["south", "r1"])
+        #expect(DiagramHighlight(button: .b, mapping: two).controllerKeys.isEmpty, "B lost its input")
+        // A keyboard mapping lights nothing on a controller diagram.
+        #expect(DiagramHighlight(button: .b, mapping: .keyboard).controllerKeys.isEmpty)
+        #expect(DiagramHighlight(button: nil, mapping: .pad) == DiagramHighlight(button: nil, mapping: .keyboard))
+    }
+
+    @Test func listsTheSystemsButtonsForThisSystemAndAllSixteenOtherwise() throws {
+        let info = try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(Fixtures.megadriveControls.utf8), status: 200)
+        let here = remapButtons(info.controls, scope: .system("megadrive"))
+        #expect(here.count == 12)
+        #expect(here.first { $0.button == "A" }?.label == "C")
+        let every = remapButtons(info.controls, scope: .everySystem)
+        #expect(every.count == 16 && every.first == SystemButton(button: "B", label: "B"))
+        #expect(every.first { $0.button == "SELECT" }?.label == "Select")
+        #expect(remapButtons(nil, scope: .system("megadrive")).count == 16, "no controls: RetroPad names")
     }
 }
