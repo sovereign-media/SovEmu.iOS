@@ -28,6 +28,8 @@ struct PlayerView: View {
     @State private var toast: String?
     @State private var controller = Controller()
     @State private var gameMenu: GameMenu?
+    /// The system's buttons and pad, and the controllers' diagrams, for remapping.
+    @State private var controls: ControlsInfo?
     @State private var video: RTCMTLVideoView = {
         let v = RTCMTLVideoView(frame: .zero)
         v.videoContentMode = .scaleAspectFit
@@ -74,11 +76,13 @@ struct PlayerView: View {
         ZStack {
             Color.black.opacity(0.7).ignoresSafeArea().onTapGesture { if gameMenu?.capture == nil { closeMenu() } }
             if let gameMenu {
+                let items = gameMenu.items(main: mainItems, close: closeMenu)
                 GameMenuView(
-                    title: game.title, heading: gameMenu.heading,
-                    items: gameMenu.items(main: mainItems, close: closeMenu),
+                    title: game.title, heading: gameMenu.heading, items: items,
                     focus: Binding(get: { gameMenu.focus }, set: { gameMenu.focus = $0 }),
+                    diagrams: gameMenu.diagrams(items),
                     prompt: gameMenu.capturePrompt, onCancelCapture: gameMenu.cancelCapture)
+                    .padding()
             }
         }
         .task {
@@ -86,6 +90,8 @@ struct PlayerView: View {
             let menu = gameMenu ?? GameMenu(controller: controller)
             menu.api = model.api
             menu.flash = { flash($0) }
+            if menu.system.id != system.id { menu.system = (system.id, system.short) }
+            menu.info = controls
             menu.open()
             gameMenu = menu
             while !Task.isCancelled {
@@ -143,9 +149,10 @@ struct PlayerView: View {
             let info = try await api.startSession(gameId: game.id)
             session = info
             controller.analogSticks = system.needsGpu
-            // The mappings in force (the user's, else the server's defaults); a model without
-            // one, or no answer, uses the built-in defaults.
-            if let mappings = try? await api.controllerMappings() { controller.setMappings(MappingStore(mappings)) }
+            // The mappings in force on this system (and on every system, for remapping); a model
+            // without one, or no answer, uses the built-in defaults.
+            controller.mappings = (try? await Mappings.fetch(system: system.id, with: api)) ?? Mappings(system: system.id)
+            controls = try? await api.controls(system: system.id)
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
             s.onState = { state in if state == .failed { status = "Connection failed" } }
             s.onMenu = {

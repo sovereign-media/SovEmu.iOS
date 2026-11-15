@@ -45,7 +45,7 @@ final class Controller {
     private var touch: UInt16 = 0
     private var players = Players<ObjectIdentifier>()
     private var keyboardPort = 0
-    private var store = MappingStore()
+    private var store = Mappings(system: "")
     private var identities: [ObjectIdentifier: ControllerIdentity] = [:]
     private var observers: [NSObjectProtocol] = []
 
@@ -83,41 +83,23 @@ final class Controller {
 
     // MARK: Mappings
 
-    /// The mappings in force (the user's, else the server's defaults), from `controllerMappings`.
-    func setMappings(_ store: MappingStore) {
-        lock.lock()
-        defer { lock.unlock() }
-        self.store = store
+    /// The user's mappings for the system being played (and for every system), as the
+    /// server layers them; replaced after every save and reset.
+    var mappings: Mappings {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return store
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            store = newValue
+        }
     }
 
-    /// The mapping in force for a controller model: the user's, else the server's default,
-    /// else the built-in defaults.
-    func mapping(for controller: String) -> ControllerMap {
-        lock.lock()
-        defer { lock.unlock() }
-        return store.mapping(for: controller)
-    }
-
-    /// Where a model's mapping comes from; nil for the built-in defaults.
-    func source(for controller: String) -> MappingSource? {
-        lock.lock()
-        defer { lock.unlock() }
-        return store.source(for: controller)
-    }
-
-    /// The user changed a model's mapping (as theirs, before the server answers).
-    func setUser(_ controller: String, _ mapping: ControllerMap) {
-        lock.lock()
-        defer { lock.unlock() }
-        store.setUser(controller, mapping)
-    }
-
-    /// What the server answered to a save.
-    func record(_ mapping: ControllerMapping) {
-        lock.lock()
-        defer { lock.unlock() }
-        store.record(mapping)
-    }
+    /// The mapping in force in play for a controller model.
+    func mapping(for controller: String) -> ControllerMap { mappings.mapping(for: controller) }
 
     // MARK: Devices and players
 
