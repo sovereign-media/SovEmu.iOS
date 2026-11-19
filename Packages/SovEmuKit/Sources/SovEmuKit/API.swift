@@ -65,8 +65,11 @@ public struct SessionInfo: Codable, Sendable {
     public let fps: Double
     /// A client is streaming it.
     public let connected: Bool
+    /// How many discs the game has (1 for most), and which is in the tray (from 1).
+    public let discs: Int?
+    public let disc: Int?
 
-    static let fields = "id gameId system title core width height fps connected"
+    static let fields = "id gameId system title core width height fps connected discs disc"
 }
 
 public struct IceServer: Codable, Sendable {
@@ -335,6 +338,7 @@ enum Documents {
         """
     static let sessionOffer = "mutation SessionOffer($id: ID!, $sdp: String!) { sessionOffer(id: $id, sdp: $sdp) }"
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
+    static let setDisc = "mutation SetDisc($sessionId: ID!, $disc: Int!) { setDisc(sessionId: $sessionId, disc: $disc) }"
     static let saveState = "mutation SaveState($sessionId: ID!, $slot: Int!) { saveState(sessionId: $sessionId, slot: $slot) }"
     static let loadState = "mutation LoadState($sessionId: ID!, $slot: Int!) { loadState(sessionId: $sessionId, slot: $slot) }"
     static let controllerMappings = """
@@ -452,6 +456,11 @@ public final class SovEmuAPI: Sendable {
     public func stopSession(_ id: String) async throws {
         _ = try await post(Documents.stopSession, ["id": .string(id)], field: "stopSession", as: Bool.self)
     }
+    /// Changes a multi-disc game's disc (from 1).
+    public func setDisc(sessionId: String, disc: Int) async throws {
+        _ = try await post(Documents.setDisc, ["sessionId": .string(sessionId), "disc": .int(disc)], field: "setDisc", as: Bool.self)
+    }
+
     public func saveState(sessionId: String, slot: Int) async throws {
         _ = try await post(Documents.saveState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "saveState", as: Bool.self)
     }
