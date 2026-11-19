@@ -25,6 +25,8 @@ struct PlayerView: View {
     @State private var status = "Starting…"
     @State private var menuOpen = false
     @State private var showTouch = GCController.controllers().isEmpty
+    /// The disc in the tray after a change (a multi-disc game); the session says until then.
+    @State private var disc: Int?
     @State private var toast: String?
     @State private var controller = Controller()
     @State private var gameMenu: GameMenu?
@@ -109,12 +111,29 @@ struct PlayerView: View {
             MenuItem(id: "continue", title: "Continue from auto save") {
                 Task { await run("Continued") { try await $0.loadState(sessionId: $1, slot: 0) } }
             },
+        ] + discItems + [
             MenuItem(id: "controllers", title: "Controllers", detail: "Players and buttons") { gameMenu?.showControllers() },
             MenuItem(id: "touch", title: showTouch ? "Hide touch controls" : "Show touch controls") {
                 showTouch.toggle()
                 closeMenu()
             },
             MenuItem(id: "quit", title: "Quit game") { Task { await quit() } },
+        ]
+    }
+
+    /// A multi-disc game: Change disc moves to the next disc (after the last, the first).
+    private var discItems: [MenuItem] {
+        let discs = session?.discs ?? 1
+        guard discs > 1 else { return [] }
+        let current = disc ?? session?.disc ?? 1
+        let next = current % discs + 1
+        return [
+            MenuItem(id: "disc", title: "Change disc", detail: "Disc \(current) of \(discs) · next: disc \(next)") {
+                Task {
+                    await run("Disc \(next) is in") { try await $0.setDisc(sessionId: $1, disc: next) }
+                    disc = next
+                }
+            },
         ]
     }
 

@@ -85,6 +85,13 @@ struct APITests {
              "core":"FCEUmm","width":256,"height":240,"fps":60.0988,"connected":false}}}
             """)
         #expect(session.id == "abc" && session.gameId == 7 && !session.connected)
+        #expect(session.discs == nil, "an older server says nothing of discs")
+        let multi = try decode(SessionInfo.self, "startSession", """
+            {"data":{"startSession":{"id":"x","gameId":8,"system":"psx","title":"Epic",
+             "core":"PCSX-ReARMed","width":256,"height":240,"fps":60.0,"connected":false,"discs":2,"disc":1}}}
+            """)
+        #expect(multi.discs == 2 && multi.disc == 1)
+        #expect(SessionInfo.fields.hasSuffix("discs disc"))
         #expect(try decode(String.self, "sessionOffer", #"{"data":{"sessionOffer":"v=0\r\n"}}"#) == "v=0\r\n")
         #expect(try decode(Bool.self, "logout", #"{"data":{"logout":true}}"#))
 
