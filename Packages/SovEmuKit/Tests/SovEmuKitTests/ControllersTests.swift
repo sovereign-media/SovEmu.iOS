@@ -354,4 +354,15 @@ struct ControllersTests {
         #expect(every.first { $0.button == "SELECT" }?.label == "Select")
         #expect(remapButtons(nil, scope: .system("megadrive")).count == 16, "no controls: RetroPad names")
     }
+
+    @Test func stickDirectionsAreInputs() {
+        #expect(stickInputs(lx: -0.9, ly: 0.1, rx: 0, ry: -0.8) == ["ls_left", "rs_down"])
+        #expect(inputLabel("ls_left", family: .xbox) == "LS ←")
+        #expect(diagramKey("rs_up") == "r3")
+        #expect(!ControllerMap.pad.bindsLeftStick)
+        let bound = ControllerMap(["ls_left": .l])
+        #expect(bound.bindsLeftStick)
+        #expect(bound.state(["ls_left"]) == RetroButton.l.bit)
+        #expect(DiagramHighlight(button: .l, mapping: bound).controllerKeys == ["l3"])
+    }
 }

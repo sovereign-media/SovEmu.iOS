@@ -204,9 +204,37 @@ public enum KeyNames {
     }
 }
 
-/// An input as its device labels it: a pad input by family (`✕`, `LB`), else a key's name.
+/// A controller's stick directions, bindable like buttons (docs/CONTROLLERS.md, "Inputs").
+public let stickInputNames = ["ls_up", "ls_down", "ls_left", "ls_right", "rs_up", "rs_down", "rs_left", "rs_right"]
+
+/// The stick directions pushed past half-way. Axes are GameController's: y points up.
+public func stickInputs(lx: Float, ly: Float, rx: Float, ry: Float, threshold: Float = 0.5) -> Set<String> {
+    var out = Set<String>()
+    for (side, x, y) in [("ls", lx, ly), ("rs", rx, ry)] {
+        if x < -threshold { out.insert("\(side)_left") }
+        if x > threshold { out.insert("\(side)_right") }
+        if y > threshold { out.insert("\(side)_up") }
+        if y < -threshold { out.insert("\(side)_down") }
+    }
+    return out
+}
+
+/// The diagram key an input lights: a stick direction lights its stick.
+public func diagramKey(_ input: String) -> String {
+    if input.hasPrefix("ls_") { return "l3" }
+    if input.hasPrefix("rs_") { return "r3" }
+    return input
+}
+
+/// An input as its device labels it: a pad input by family (`✕`, `LB`), a stick direction
+/// (`LS ←`), else a key's name.
 public func inputLabel(_ input: String, family: ControllerFamily?) -> String {
     if let family, let pad = PadInput(rawValue: input) { return family.label(pad) }
+    if stickInputNames.contains(input) {
+        let parts = input.split(separator: "_")
+        let arrows = ["up": "↑", "down": "↓", "left": "←", "right": "→"]
+        return "\(parts[0].uppercased()) \(arrows[String(parts[1])] ?? "")"
+    }
     return KeyNames.label(input)
 }
 
@@ -276,6 +304,9 @@ public struct ControllerMap: Equatable, Sendable {
         }
         self.init(map)
     }
+
+    /// Whether any of the left stick's directions is bound: then it no longer doubles as the D-pad.
+    public var bindsLeftStick: Bool { bindings.keys.contains { $0.hasPrefix("ls_") } }
 
     /// The RetroPad state of a set of pressed inputs.
     public func state(_ pressed: some Sequence<String>) -> UInt16 {
@@ -466,7 +497,7 @@ public struct DiagramHighlight: Equatable, Sendable {
             return
         }
         systemKeys = [button.name]
-        controllerKeys = Set(mapping.inputs(for: button).filter { PadInput(rawValue: $0) != nil })
+        controllerKeys = Set(mapping.inputs(for: button).map(diagramKey).filter { PadInput(rawValue: $0) != nil })
     }
 }
 

@@ -155,6 +155,14 @@ final class Controller {
         return keys
     }
 
+    /// Both sticks' directions past half-way (`ls_left` …), bindable inputs.
+    private static func sticks(_ pad: GCExtendedGamepad) -> Set<String> {
+        stickInputs(
+            lx: pad.leftThumbstick.xAxis.value, ly: pad.leftThumbstick.yAxis.value,
+            rx: pad.rightThumbstick.xAxis.value, ry: pad.rightThumbstick.yAxis.value
+        )
+    }
+
     /// The left stick pushed past halfway, as D-pad directions.
     private static func stickDirections(_ pad: GCExtendedGamepad) -> Set<String> {
         let x = pad.leftThumbstick.xAxis.value, y = pad.leftThumbstick.yAxis.value
@@ -175,6 +183,7 @@ final class Controller {
             guard let pad = controller.extendedGamepad else { continue }
             var inputs = Self.pressedInputs(pad)
             if stick { inputs.formUnion(Self.stickDirections(pad)) }
+            inputs.formUnion(Self.sticks(pad))
             if pad.buttonHome?.isPressed == true { inputs.insert("home") }
             out[.pad(ObjectIdentifier(controller))] = inputs
         }
@@ -227,8 +236,9 @@ final class Controller {
             fastForward = fastForward || hotkeys.fastForward
             rewind = rewind || hotkeys.rewind
             menu = menu || hotkeys.menu || pad.buttonHome?.isPressed == true
-            var state = hotkeys.state
-            if !analogSticks {
+            var state = hotkeys.state | mapping.state(Self.sticks(pad))
+            // Unbound, the left stick doubles as the D-pad (not on a system that reads the sticks).
+            if !analogSticks && !mapping.bindsLeftStick {
                 for direction in Self.stickDirections(pad) {
                     state |= ControllerMap.pad.state([direction])
                 }
