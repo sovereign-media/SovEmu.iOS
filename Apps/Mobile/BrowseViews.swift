@@ -51,7 +51,8 @@ struct ConnectView: View {
                 error = "Finish first-run setup in a browser at \(server) first."
                 return
             }
-            _ = try await api.login(username: username, password: password)
+            // A refusal carries the server's `error_description` ("Wrong username or password.").
+            try await api.signIn(username: username, password: password)
             model.signedIn = true
         } catch {
             self.error = error.localizedDescription
@@ -119,10 +120,7 @@ struct SystemsView: View {
         .navigationTitle("SovEmu")
         .toolbar {
             Button("Sign out") {
-                Task {
-                    try? await model.api?.logout()
-                    model.signedIn = false
-                }
+                Task { await model.signOut() }
             }
         }
         .task {

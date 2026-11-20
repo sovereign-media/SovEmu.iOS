@@ -5,9 +5,26 @@ import Foundation
 public struct User: Codable, Sendable, Equatable {
     public let id: Int64
     public let username: String
+    /// The same as `role == .admin`.
     public let isAdmin: Bool
+    public let role: Role
 
-    static let fields = "id username isAdmin"
+    public init(id: Int64, username: String, isAdmin: Bool, role: Role) {
+        (self.id, self.username, self.isAdmin, self.role) = (id, username, isAdmin, role)
+    }
+
+    static let fields = "id username isAdmin role"
+}
+
+/// What a user may do (`Role`).
+public enum Role: String, Codable, Sendable {
+    case viewer = "VIEWER"
+    case admin = "ADMIN"
+
+    public init(from decoder: Decoder) throws {
+        // A role a newer server adds grants nothing more than viewing.
+        self = Role(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .viewer
+    }
 }
 
 /// `Viewer`: who is signed in, and whether first-run setup is needed.
@@ -325,11 +342,6 @@ struct GraphQLResponse<T: Decodable>: Decodable {
 /// The query documents the app sends, written by hand against `schema.graphql`.
 enum Documents {
     static let viewer = "query Viewer { viewer { setupRequired user { \(User.fields) } } }"
-    static let login = """
-        mutation Login($username: String!, $password: String!) { \
-        login(username: $username, password: $password) { \(User.fields) } }
-        """
-    static let logout = "mutation Logout { logout }"
     static let clientConfig = "query ClientConfig { clientConfig { iceServers } }"
     static let systems = "query Systems { systems { \(SystemSummary.fields) } }"
     static let games = "query Games($system: ID!) { system(id: $system) { games { \(Game.fields) } } }"
@@ -360,16 +372,54 @@ enum Documents {
 
 // MARK: - Client
 
-/// Calls to the SovEmu GraphQL API. The session cookie (set by `login`, cleared by `logout`)
-/// lives in `HTTPCookieStorage.shared`, so sign-in survives relaunches.
+/// Calls to the SovEmu GraphQL API. Each request carries `Authorization: Bearer` with an access
+/// token from `auth` (none when signed out); an `UNAUTHENTICATED` answer refreshes the token and
+/// retries once. No cookies are sent or kept.
 public final class SovEmuAPI: Sendable {
     public let baseURL: URL
+    /// Signs in and out and keeps the access token; nil for an API that is never signed in.
+    public let auth: TokenClient?
     private let session: URLSession
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL, auth: TokenClient? = nil, session: URLSession = SovEmuAPI.makeSession()) {
         self.baseURL = baseURL
+        self.auth = auth
         self.session = session
     }
+
+    /// A session that neither sends nor stores cookies: the API authenticates with tokens.
+    public static func sessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        return configuration
+    }
+
+    public static func makeSession() -> URLSession { URLSession(configuration: sessionConfiguration()) }
+
+    /// The cookie the server's sign-in used before tokens: it means nothing now, so it goes.
+    public static let legacySessionCookie = "sovemu_session"
+
+    /// Deletes any stored `sovemu_session` cookie (from an older version of the app).
+    public static func clearLegacySessionCookie(in storage: HTTPCookieStorage = .shared) {
+        for cookie in storage.cookies ?? [] where cookie.name == legacySessionCookie {
+            storage.deleteCookie(cookie)
+        }
+    }
+
+    /// A refresh token is stored.
+    public var isSignedIn: Bool { auth?.isSignedIn ?? false }
+
+    /// Signs in with the password grant; throws `AuthError` with the server's description.
+    public func signIn(username: String, password: String) async throws {
+        guard let auth else { throw AuthError.signedOut }
+        try await auth.signIn(username: username, password: password)
+    }
+
+    /// Revokes the sign-in and forgets the tokens (also when the server cannot be reached).
+    public func signOut() async { await auth?.signOut() }
 
     /// The request for one GraphQL operation.
     static func request(baseURL: URL, query: String, variables: [String: GraphQLValue]) throws -> URLRequest {
@@ -378,6 +428,7 @@ public final class SovEmuAPI: Sendable {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpShouldHandleCookies = false
         request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: query, variables: variables))
         return request
     }
@@ -424,20 +475,49 @@ public final class SovEmuAPI: Sendable {
         return value
     }
 
+    /// Sends one operation with the access token and reads the answer. When the server says
+    /// `UNAUTHENTICATED` to a token, refreshes it and sends the operation once more.
+    private func send<T>(
+        _ query: String, _ variables: [String: GraphQLValue], read: (Data, Int) throws -> T
+    ) async throws -> T {
+        var request = try Self.request(baseURL: baseURL, query: query, variables: variables)
+        let token = try await signedOutAsAPIError { try await self.auth?.accessToken() }
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, status) = try await load(request)
+        do {
+            return try read(data, status)
+        } catch let error as APIError where error.isUnauthenticated {
+            guard let auth, let token else { throw error }
+            let fresh = try await signedOutAsAPIError { try await auth.refresh(replacing: token) }
+            request.setValue("Bearer \(fresh)", forHTTPHeaderField: "Authorization")
+            let (data, status) = try await load(request)
+            return try read(data, status)
+        }
+    }
+
+    private func load(_ request: URLRequest) async throws -> (Data, Int) {
+        let (data, response) = try await session.data(for: request)
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    /// A refused refresh is the end of the sign-in: report it as `UNAUTHENTICATED`, as the
+    /// API would, so callers have one thing to check. Other failures (offline) pass through.
+    private func signedOutAsAPIError<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let error as AuthError where error.isInvalidGrant || error == .signedOut {
+            throw APIError(status: 401, code: "UNAUTHENTICATED", message: error.message ?? "Sign in again.")
+        }
+    }
+
     /// Sends one operation and returns its root `field`.
     private func post<T: Decodable>(
         _ query: String, _ variables: [String: GraphQLValue] = [:], field: String, as type: T.Type = T.self
     ) async throws -> T {
-        let request = try Self.request(baseURL: baseURL, query: query, variables: variables)
-        let (data, response) = try await session.data(for: request)
-        return try Self.decode(T.self, field: field, from: data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        try await send(query, variables) { try Self.decode(T.self, field: field, from: $0, status: $1) }
     }
 
     public func status() async throws -> AuthStatus { try await post(Documents.viewer, field: "viewer") }
-    public func login(username: String, password: String) async throws -> User {
-        try await post(Documents.login, ["username": .string(username), "password": .string(password)], field: "login")
-    }
-    public func logout() async throws { _ = try await post(Documents.logout, field: "logout", as: Bool.self) }
     public func config() async throws -> ClientConfig { try await post(Documents.clientConfig, field: "clientConfig") }
     public func systems() async throws -> [SystemSummary] { try await post(Documents.systems, field: "systems") }
     public func games(system: String) async throws -> [Game] {
@@ -493,9 +573,7 @@ public final class SovEmuAPI: Sendable {
     }
     /// A system's buttons and pad, and the controllers' diagrams.
     public func controls(system: String) async throws -> ControlsInfo {
-        let request = try Self.request(baseURL: baseURL, query: Documents.controls, variables: ["system": .string(system)])
-        let (data, response) = try await session.data(for: request)
-        return try Self.decodeData(ControlsInfo.self, from: data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        try await send(Documents.controls, ["system": .string(system)]) { try Self.decodeData(ControlsInfo.self, from: $0, status: $1) }
     }
 
     static func system(_ system: String?) -> GraphQLValue { system.map(GraphQLValue.string) ?? .null }

@@ -14,17 +14,39 @@ struct SovEmuApp: App {
     }
 }
 
-/// The server address (kept across launches) and the API client for it. The sign-in cookie
-/// lives in the shared cookie storage.
+/// The server address (kept across launches) and the API client for it. Signed in means a
+/// refresh token for that server is in the Keychain; the access token lives in the client.
 @Observable
 final class AppModel {
     var serverURL: String = UserDefaults.standard.string(forKey: "server") ?? "" {
-        didSet { UserDefaults.standard.set(serverURL, forKey: "server") }
+        didSet {
+            UserDefaults.standard.set(serverURL, forKey: "server")
+            if serverURL != oldValue { api = makeAPI() }
+        }
     }
     var signedIn = false
+    /// One client per server address, so its token refreshes are shared by every screen.
+    @ObservationIgnored private(set) var api: SovEmuAPI?
 
-    var api: SovEmuAPI? {
-        URL(string: serverURL.trimmingCharacters(in: .whitespaces)).map { SovEmuAPI(baseURL: $0) }
+    init() {
+        // Before tokens the server signed in with a cookie; it means nothing now.
+        SovEmuAPI.clearLegacySessionCookie()
+        api = makeAPI()
+        signedIn = api?.isSignedIn ?? false
+    }
+
+    private func makeAPI() -> SovEmuAPI? {
+        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)) else { return nil }
+        // The server refused the refresh token (expired or revoked): back to the sign-in screen.
+        let auth = TokenClient(baseURL: url, store: KeychainTokenStore(server: url), onSignedOut: { [weak self] in
+            Task { @MainActor in self?.signedIn = false }
+        })
+        return SovEmuAPI(baseURL: url, auth: auth)
+    }
+
+    func signOut() async {
+        await api?.signOut()
+        signedIn = false
     }
 }
 
@@ -60,8 +82,15 @@ struct RootView: View {
             }
         }
         .task {
-            if let api = model.api, let status = try? await api.status() {
-                model.signedIn = status.user != nil
+            // A stored refresh token is a sign-in; asking who we are refreshes it, and ends it
+            // if the server no longer honours it. Offline, stay signed in: the next screen says
+            // what is wrong.
+            if let api = model.api, api.isSignedIn {
+                do {
+                    if try await api.status().user == nil { await model.signOut() }
+                } catch let error as APIError where error.isUnauthenticated {
+                    model.signedIn = false
+                } catch {}
             }
             checked = true
         }
