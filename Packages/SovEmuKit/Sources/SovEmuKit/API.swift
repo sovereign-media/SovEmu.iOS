@@ -5,15 +5,95 @@ import Foundation
 public struct User: Codable, Sendable, Equatable {
     public let id: Int64
     public let username: String
+    /// The same as `role == .admin`.
     public let isAdmin: Bool
+    public let role: Role
 
-    static let fields = "id username isAdmin"
+    public init(id: Int64, username: String, isAdmin: Bool, role: Role) {
+        (self.id, self.username, self.isAdmin, self.role) = (id, username, isAdmin, role)
+    }
+
+    static let fields = "id username isAdmin role"
+}
+
+/// What a user may do (`Role`).
+public enum Role: String, Codable, Sendable {
+    case viewer = "VIEWER"
+    case admin = "ADMIN"
+
+    public init(from decoder: Decoder) throws {
+        // A role a newer server adds grants nothing more than viewing.
+        self = Role(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .viewer
+    }
 }
 
 /// `Viewer`: who is signed in, and whether first-run setup is needed.
 public struct AuthStatus: Codable, Sendable {
     public let setupRequired: Bool
     public let user: User?
+}
+
+/// `BootstrapConfig`: how to sign in at this address. Anonymous, and the first thing the app
+/// asks a server (so also the check that there is a SovEmu server at an address).
+public struct BootstrapConfig: Codable, Sendable, Equatable {
+    /// False when this address is not one of the server's `SOVEMU_PUBLIC_URL`; the rest is nil.
+    public let signInAvailable: Bool
+    /// The address the request reached, as the server saw it.
+    public let address: String
+    public let issuer: String?
+    public let webClientId: String?
+    public let nativeClientId: String?
+    public let authorizationEndpoint: String?
+    public let tokenEndpoint: String?
+    public let revocationEndpoint: String?
+    public let deviceAuthorizationEndpoint: String?
+    public let verificationUri: String?
+    /// Nil when the server has turned password sign-in off.
+    public let passwordEndpoint: String?
+
+    public init(
+        signInAvailable: Bool, address: String, issuer: String? = nil, webClientId: String? = nil,
+        nativeClientId: String? = nil, authorizationEndpoint: String? = nil, tokenEndpoint: String? = nil,
+        revocationEndpoint: String? = nil, deviceAuthorizationEndpoint: String? = nil, verificationUri: String? = nil,
+        passwordEndpoint: String? = nil
+    ) {
+        self.signInAvailable = signInAvailable
+        self.address = address
+        self.issuer = issuer
+        self.webClientId = webClientId
+        self.nativeClientId = nativeClientId
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.revocationEndpoint = revocationEndpoint
+        self.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint
+        self.verificationUri = verificationUri
+        self.passwordEndpoint = passwordEndpoint
+    }
+
+    static let fields = """
+        signInAvailable address issuer webClientId nativeClientId authorizationEndpoint tokenEndpoint \
+        revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint
+        """
+
+    static let codeOnlyMessage =
+        "This server signs in with a code shown on the screen, which this version of the app can't do yet."
+
+    /// Why this app cannot sign in here, for people; nil when it can.
+    public var signInProblem: String? {
+        if !signInAvailable || endpoints(relativeTo: nil) == nil {
+            return "Signing in isn't available at \(address). Add it to SOVEMU_PUBLIC_URL on the server."
+        }
+        if passwordEndpoint == nil { return Self.codeOnlyMessage }
+        return nil
+    }
+
+    /// The client's endpoints, resolved against the server address when relative; nil when
+    /// nothing can sign in here.
+    public func endpoints(relativeTo base: URL?) -> SignInEndpoints? {
+        func url(_ string: String?) -> URL? { string.flatMap { URL(string: $0, relativeTo: base)?.absoluteURL } }
+        guard signInAvailable, let clientId = nativeClientId, let token = url(tokenEndpoint) else { return nil }
+        return SignInEndpoints(clientId: clientId, token: token, revocation: url(revocationEndpoint), password: url(passwordEndpoint))
+    }
 }
 
 public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
@@ -324,12 +404,8 @@ struct GraphQLResponse<T: Decodable>: Decodable {
 
 /// The query documents the app sends, written by hand against `schema.graphql`.
 enum Documents {
+    static let bootstrapConfig = "query BootstrapConfig { bootstrapConfig { \(BootstrapConfig.fields) } }"
     static let viewer = "query Viewer { viewer { setupRequired user { \(User.fields) } } }"
-    static let login = """
-        mutation Login($username: String!, $password: String!) { \
-        login(username: $username, password: $password) { \(User.fields) } }
-        """
-    static let logout = "mutation Logout { logout }"
     static let clientConfig = "query ClientConfig { clientConfig { iceServers } }"
     static let systems = "query Systems { systems { \(SystemSummary.fields) } }"
     static let games = "query Games($system: ID!) { system(id: $system) { games { \(Game.fields) } } }"
@@ -360,16 +436,54 @@ enum Documents {
 
 // MARK: - Client
 
-/// Calls to the SovEmu GraphQL API. The session cookie (set by `login`, cleared by `logout`)
-/// lives in `HTTPCookieStorage.shared`, so sign-in survives relaunches.
+/// Calls to the SovEmu GraphQL API. Each request carries `Authorization: Bearer` with an access
+/// token from `auth` (none when signed out); an `UNAUTHENTICATED` answer refreshes the token and
+/// retries once. No cookies are sent or kept.
 public final class SovEmuAPI: Sendable {
     public let baseURL: URL
+    /// Signs in and out and keeps the access token; nil for an API that is never signed in.
+    public let auth: TokenClient?
     private let session: URLSession
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(baseURL: URL, auth: TokenClient? = nil, session: URLSession = SovEmuAPI.makeSession()) {
         self.baseURL = baseURL
+        self.auth = auth
         self.session = session
     }
+
+    /// A session that neither sends nor stores cookies: the API authenticates with tokens.
+    public static func sessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCache = nil
+        return configuration
+    }
+
+    public static func makeSession() -> URLSession { URLSession(configuration: sessionConfiguration()) }
+
+    /// The cookie the server's sign-in used before tokens: it means nothing now, so it goes.
+    public static let legacySessionCookie = "sovemu_session"
+
+    /// Deletes any stored `sovemu_session` cookie (from an older version of the app).
+    public static func clearLegacySessionCookie(in storage: HTTPCookieStorage = .shared) {
+        for cookie in storage.cookies ?? [] where cookie.name == legacySessionCookie {
+            storage.deleteCookie(cookie)
+        }
+    }
+
+    /// A refresh token is stored.
+    public var isSignedIn: Bool { auth?.isSignedIn ?? false }
+
+    /// Signs in with the password grant; throws `AuthError` with the server's description.
+    public func signIn(username: String, password: String) async throws {
+        guard let auth else { throw AuthError.signedOut }
+        try await auth.signIn(username: username, password: password)
+    }
+
+    /// Revokes the sign-in and forgets the tokens (also when the server cannot be reached).
+    public func signOut() async { await auth?.signOut() }
 
     /// The request for one GraphQL operation.
     static func request(baseURL: URL, query: String, variables: [String: GraphQLValue]) throws -> URLRequest {
@@ -378,6 +492,7 @@ public final class SovEmuAPI: Sendable {
         request.timeoutInterval = 30
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpShouldHandleCookies = false
         request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: query, variables: variables))
         return request
     }
@@ -424,20 +539,59 @@ public final class SovEmuAPI: Sendable {
         return value
     }
 
+    /// Sends one operation with the access token and reads the answer. When the server says
+    /// `UNAUTHENTICATED` to a token, refreshes it and sends the operation once more.
+    private func send<T>(
+        _ query: String, _ variables: [String: GraphQLValue], authenticated: Bool = true, read: (Data, Int) throws -> T
+    ) async throws -> T {
+        var request = try Self.request(baseURL: baseURL, query: query, variables: variables)
+        let token = authenticated ? try await signedOutAsAPIError { try await self.auth?.accessToken() } : nil
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        let (data, status) = try await load(request)
+        do {
+            return try read(data, status)
+        } catch let error as APIError where error.isUnauthenticated {
+            guard let auth, let token else { throw error }
+            let fresh = try await signedOutAsAPIError { try await auth.refresh(replacing: token) }
+            request.setValue("Bearer \(fresh)", forHTTPHeaderField: "Authorization")
+            let (data, status) = try await load(request)
+            return try read(data, status)
+        }
+    }
+
+    private func load(_ request: URLRequest) async throws -> (Data, Int) {
+        let (data, response) = try await session.data(for: request)
+        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    /// A refused refresh is the end of the sign-in: report it as `UNAUTHENTICATED`, as the
+    /// API would, so callers have one thing to check. Other failures (offline) pass through.
+    private func signedOutAsAPIError<T>(_ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch let error as AuthError where error.isInvalidGrant || error == .signedOut {
+            throw APIError(status: 401, code: "UNAUTHENTICATED", message: error.message ?? "Sign in again.")
+        }
+    }
+
     /// Sends one operation and returns its root `field`.
     private func post<T: Decodable>(
         _ query: String, _ variables: [String: GraphQLValue] = [:], field: String, as type: T.Type = T.self
     ) async throws -> T {
-        let request = try Self.request(baseURL: baseURL, query: query, variables: variables)
-        let (data, response) = try await session.data(for: request)
-        return try Self.decode(T.self, field: field, from: data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        try await send(query, variables) { try Self.decode(T.self, field: field, from: $0, status: $1) }
+    }
+
+    /// How to sign in here (asked without a token, so it works before sign-in and before the
+    /// client knows where to refresh). Hands the endpoints to `auth`.
+    public func bootstrap() async throws -> BootstrapConfig {
+        let config: BootstrapConfig = try await send(Documents.bootstrapConfig, [:], authenticated: false) {
+            try Self.decode(BootstrapConfig.self, field: "bootstrapConfig", from: $0, status: $1)
+        }
+        await auth?.setEndpoints(config.endpoints(relativeTo: baseURL))
+        return config
     }
 
     public func status() async throws -> AuthStatus { try await post(Documents.viewer, field: "viewer") }
-    public func login(username: String, password: String) async throws -> User {
-        try await post(Documents.login, ["username": .string(username), "password": .string(password)], field: "login")
-    }
-    public func logout() async throws { _ = try await post(Documents.logout, field: "logout", as: Bool.self) }
     public func config() async throws -> ClientConfig { try await post(Documents.clientConfig, field: "clientConfig") }
     public func systems() async throws -> [SystemSummary] { try await post(Documents.systems, field: "systems") }
     public func games(system: String) async throws -> [Game] {
@@ -493,9 +647,7 @@ public final class SovEmuAPI: Sendable {
     }
     /// A system's buttons and pad, and the controllers' diagrams.
     public func controls(system: String) async throws -> ControlsInfo {
-        let request = try Self.request(baseURL: baseURL, query: Documents.controls, variables: ["system": .string(system)])
-        let (data, response) = try await session.data(for: request)
-        return try Self.decodeData(ControlsInfo.self, from: data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        try await send(Documents.controls, ["system": .string(system)]) { try Self.decodeData(ControlsInfo.self, from: $0, status: $1) }
     }
 
     static func system(_ system: String?) -> GraphQLValue { system.map(GraphQLValue.string) ?? .null }

@@ -18,13 +18,16 @@ struct APITests {
 
     @Test func postsQueryAndVariablesToGraphql() throws {
         let request = try SovEmuAPI.request(
-            baseURL: base, query: Documents.login, variables: ["username": .string("ada"), "password": .string("pw")])
+            baseURL: base, query: Documents.games, variables: ["system": .string("nes")])
         #expect(request.url?.absoluteString == "http://192.168.1.20:8080/graphql")
         #expect(request.httpMethod == "POST")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         let json = try body(request)
-        #expect(json["query"] as? String == Documents.login)
-        #expect(json["variables"] as? [String: String] == ["username": "ada", "password": "pw"])
+        #expect(json["query"] as? String == Documents.games)
+        #expect(json["variables"] as? [String: String] == ["system": "nes"])
+        // The API authenticates with tokens, never cookies.
+        #expect(!request.httpShouldHandleCookies)
+        #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
     }
 
     @Test func encodesIntAndBoolVariablesAsJsonNumbersAndBooleans() throws {
@@ -35,26 +38,32 @@ struct APITests {
         #expect(variables["on"] as? Bool == true)
         #expect(variables["sessionId"] as? String == "s1")
         // No variables still sends an object, never null.
-        let bare = try body(SovEmuAPI.request(baseURL: base, query: Documents.logout, variables: [:]))
+        let bare = try body(SovEmuAPI.request(baseURL: base, query: Documents.systems, variables: [:]))
         #expect((bare["variables"] as? [String: Any])?.isEmpty == true)
     }
 
     @Test func documentsUseTheSchemasNames() {
-        #expect(Documents.viewer.contains("viewer { setupRequired user { id username isAdmin } }"))
+        #expect(Documents.viewer.contains("viewer { setupRequired user { id username isAdmin role } }"))
         #expect(Documents.games.contains("system(id: $system) { games {"))
         #expect(Documents.startSession.contains("startSession(gameId: $gameId)"))
         #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp)"))
         #expect(Documents.loadState.contains("loadState(sessionId: $sessionId, slot: $slot)"))
-        for document in [Documents.viewer, Documents.login, Documents.systems, Documents.games, Documents.startSession] {
+        for document in [Documents.viewer, Documents.systems, Documents.games, Documents.startSession] {
             #expect(!document.contains("_"), "camelCase, not snake_case: \(document)")
         }
     }
 
     @Test func decodesViewerAndSystems() throws {
         let status = try decode(AuthStatus.self, "viewer", """
-            {"data":{"viewer":{"setupRequired":false,"user":{"id":1,"username":"ada","isAdmin":true}}}}
+            {"data":{"viewer":{"setupRequired":false,"user":{"id":1,"username":"ada","isAdmin":true,"role":"ADMIN"}}}}
             """)
-        #expect(status.user == User(id: 1, username: "ada", isAdmin: true))
+        #expect(status.user == User(id: 1, username: "ada", isAdmin: true, role: .admin))
+        let viewer = try decode(AuthStatus.self, "viewer", """
+            {"data":{"viewer":{"setupRequired":false,"user":{"id":2,"username":"bo","isAdmin":false,"role":"VIEWER"}}}}
+            """)
+        #expect(viewer.user?.role == .viewer)
+        let newer = try decode(User.self, "user", #"{"data":{"user":{"id":3,"username":"cy","isAdmin":false,"role":"GUEST"}}}"#)
+        #expect(newer.role == .viewer, "an unknown role grants no more than viewing")
         #expect(try decode(AuthStatus.self, "viewer", #"{"data":{"viewer":{"setupRequired":true,"user":null}}}"#).user == nil)
 
         let systems = try decode([SystemSummary].self, "systems", """
@@ -93,7 +102,7 @@ struct APITests {
         #expect(multi.discs == 2 && multi.disc == 1)
         #expect(SessionInfo.fields.hasSuffix("discs disc"))
         #expect(try decode(String.self, "sessionOffer", #"{"data":{"sessionOffer":"v=0\r\n"}}"#) == "v=0\r\n")
-        #expect(try decode(Bool.self, "logout", #"{"data":{"logout":true}}"#))
+        #expect(try decode(Bool.self, "stopSession", #"{"data":{"stopSession":true}}"#))
 
         // `iceServers` is a JSON scalar holding `RTCIceServer` objects.
         let config = try decode(ClientConfig.self, "clientConfig", """
@@ -216,7 +225,7 @@ struct APITests {
         #expect(error.localizedDescription == "sign in first")
 
         let wrong = #"{"data":null,"errors":[{"message":"wrong username or password","extensions":{"code":"UNAUTHENTICATED"}}]}"#
-        #expect(throws: APIError.self) { try decode(User.self, "login", wrong) }
+        #expect(throws: APIError.self) { try decode(AuthStatus.self, "viewer", wrong) }
 
         let missing = #"{"data":null,"errors":[{"message":"no such game","extensions":{"code":"NOT_FOUND"}}]}"#
         let notFound = try #require(throws: APIError.self) { try decode(SessionInfo.self, "startSession", missing) }
@@ -230,9 +239,9 @@ struct APITests {
     }
 
     @Test func reportsHttpFailuresAndUnreadableAnswers() throws {
-        let gateway = try #require(throws: APIError.self) { try decode(Bool.self, "logout", "<html>", status: 502) }
+        let gateway = try #require(throws: APIError.self) { try decode(Bool.self, "stopSession", "<html>", status: 502) }
         #expect(gateway.status == 502 && gateway.code == nil)
-        let odd = try #require(throws: APIError.self) { try decode(Bool.self, "logout", #"{"data":{"logout":"yes"}}"#) }
+        let odd = try #require(throws: APIError.self) { try decode(Bool.self, "stopSession", #"{"data":{"stopSession":"yes"}}"#) }
         #expect(odd.status == 200)
         #expect(APIError(status: 401, message: "").isUnauthenticated)
     }
