@@ -33,6 +33,69 @@ public struct AuthStatus: Codable, Sendable {
     public let user: User?
 }
 
+/// `BootstrapConfig`: how to sign in at this address. Anonymous, and the first thing the app
+/// asks a server (so also the check that there is a SovEmu server at an address).
+public struct BootstrapConfig: Codable, Sendable, Equatable {
+    /// False when this address is not one of the server's `SOVEMU_PUBLIC_URL`; the rest is nil.
+    public let signInAvailable: Bool
+    /// The address the request reached, as the server saw it.
+    public let address: String
+    public let issuer: String?
+    public let webClientId: String?
+    public let nativeClientId: String?
+    public let authorizationEndpoint: String?
+    public let tokenEndpoint: String?
+    public let revocationEndpoint: String?
+    public let deviceAuthorizationEndpoint: String?
+    public let verificationUri: String?
+    /// Nil when the server has turned password sign-in off.
+    public let passwordEndpoint: String?
+
+    public init(
+        signInAvailable: Bool, address: String, issuer: String? = nil, webClientId: String? = nil,
+        nativeClientId: String? = nil, authorizationEndpoint: String? = nil, tokenEndpoint: String? = nil,
+        revocationEndpoint: String? = nil, deviceAuthorizationEndpoint: String? = nil, verificationUri: String? = nil,
+        passwordEndpoint: String? = nil
+    ) {
+        self.signInAvailable = signInAvailable
+        self.address = address
+        self.issuer = issuer
+        self.webClientId = webClientId
+        self.nativeClientId = nativeClientId
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.revocationEndpoint = revocationEndpoint
+        self.deviceAuthorizationEndpoint = deviceAuthorizationEndpoint
+        self.verificationUri = verificationUri
+        self.passwordEndpoint = passwordEndpoint
+    }
+
+    static let fields = """
+        signInAvailable address issuer webClientId nativeClientId authorizationEndpoint tokenEndpoint \
+        revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint
+        """
+
+    static let codeOnlyMessage =
+        "This server signs in with a code shown on the screen, which this version of the app can't do yet."
+
+    /// Why this app cannot sign in here, for people; nil when it can.
+    public var signInProblem: String? {
+        if !signInAvailable || endpoints(relativeTo: nil) == nil {
+            return "Signing in isn't available at \(address). Add it to SOVEMU_PUBLIC_URL on the server."
+        }
+        if passwordEndpoint == nil { return Self.codeOnlyMessage }
+        return nil
+    }
+
+    /// The client's endpoints, resolved against the server address when relative; nil when
+    /// nothing can sign in here.
+    public func endpoints(relativeTo base: URL?) -> SignInEndpoints? {
+        func url(_ string: String?) -> URL? { string.flatMap { URL(string: $0, relativeTo: base)?.absoluteURL } }
+        guard signInAvailable, let clientId = nativeClientId, let token = url(tokenEndpoint) else { return nil }
+        return SignInEndpoints(clientId: clientId, token: token, revocation: url(revocationEndpoint), password: url(passwordEndpoint))
+    }
+}
+
 public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     public let id: String
     public let name: String
@@ -341,6 +404,7 @@ struct GraphQLResponse<T: Decodable>: Decodable {
 
 /// The query documents the app sends, written by hand against `schema.graphql`.
 enum Documents {
+    static let bootstrapConfig = "query BootstrapConfig { bootstrapConfig { \(BootstrapConfig.fields) } }"
     static let viewer = "query Viewer { viewer { setupRequired user { \(User.fields) } } }"
     static let clientConfig = "query ClientConfig { clientConfig { iceServers } }"
     static let systems = "query Systems { systems { \(SystemSummary.fields) } }"
@@ -478,10 +542,10 @@ public final class SovEmuAPI: Sendable {
     /// Sends one operation with the access token and reads the answer. When the server says
     /// `UNAUTHENTICATED` to a token, refreshes it and sends the operation once more.
     private func send<T>(
-        _ query: String, _ variables: [String: GraphQLValue], read: (Data, Int) throws -> T
+        _ query: String, _ variables: [String: GraphQLValue], authenticated: Bool = true, read: (Data, Int) throws -> T
     ) async throws -> T {
         var request = try Self.request(baseURL: baseURL, query: query, variables: variables)
-        let token = try await signedOutAsAPIError { try await self.auth?.accessToken() }
+        let token = authenticated ? try await signedOutAsAPIError { try await self.auth?.accessToken() } : nil
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, status) = try await load(request)
         do {
@@ -515,6 +579,16 @@ public final class SovEmuAPI: Sendable {
         _ query: String, _ variables: [String: GraphQLValue] = [:], field: String, as type: T.Type = T.self
     ) async throws -> T {
         try await send(query, variables) { try Self.decode(T.self, field: field, from: $0, status: $1) }
+    }
+
+    /// How to sign in here (asked without a token, so it works before sign-in and before the
+    /// client knows where to refresh). Hands the endpoints to `auth`.
+    public func bootstrap() async throws -> BootstrapConfig {
+        let config: BootstrapConfig = try await send(Documents.bootstrapConfig, [:], authenticated: false) {
+            try Self.decode(BootstrapConfig.self, field: "bootstrapConfig", from: $0, status: $1)
+        }
+        await auth?.setEndpoints(config.endpoints(relativeTo: baseURL))
+        return config
     }
 
     public func status() async throws -> AuthStatus { try await post(Documents.viewer, field: "viewer") }

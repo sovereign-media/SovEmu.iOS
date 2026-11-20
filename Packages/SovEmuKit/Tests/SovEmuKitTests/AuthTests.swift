@@ -39,6 +39,15 @@ final class Stub: Sendable {
         }
     }
 
+    /// The endpoints the server's `bootstrapConfig` names by default.
+    var endpoints: SignInEndpoints { Self.endpoints(base) }
+
+    static func endpoints(_ base: URL) -> SignInEndpoints {
+        SignInEndpoints(
+            clientId: "sovemu-native", token: base.appending(path: "oauth/token"),
+            revocation: base.appending(path: "oauth/revoke"), password: base.appending(path: "oauth/password"))
+    }
+
     var requests: [Seen] { seen.items.withLock { $0 } }
     func requests(to path: String) -> [Seen] { requests.filter { $0.path == path } }
 
@@ -125,7 +134,7 @@ struct AuthTests {
     @Test func signsInWithAPasswordAtItsOwnRoute() async throws {
         let stub = Stub { _, _ in Stub.tokens("a1", "r1") }
         let store = MemoryTokenStore()
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         #expect(!auth.isSignedIn)
 
         try await auth.signIn(username: "ada lovelace", password: "p&ss=w0rd")
@@ -147,7 +156,7 @@ struct AuthTests {
     @Test func wrongPasswordShowsTheServersDescription() async throws {
         let stub = Stub { _, _ in Stub.oauthError(400, "invalid_grant", "Wrong username or password.") }
         let store = MemoryTokenStore()
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         let error = try await #require(throws: AuthError.self) { try await auth.signIn(username: "ada", password: "nope") }
         #expect(error.isInvalidGrant && error.status == 400)
         #expect(error.localizedDescription == "Wrong username or password.")
@@ -155,19 +164,19 @@ struct AuthTests {
         #expect(try await auth.accessToken() == nil)
 
         let throttled = Stub { _, _ in Stub.oauthError(429, "too_many_requests", "Too many attempts: try again in 5 minutes.") }
-        let limited = TokenClient(baseURL: throttled.base, store: MemoryTokenStore(), session: throttled.session)
+        let limited = TokenClient(baseURL: throttled.base, endpoints: throttled.endpoints, store: MemoryTokenStore(), session: throttled.session)
         let wait = try await #require(throws: AuthError.self) { try await limited.signIn(username: "ada", password: "x") }
         #expect(wait.code == "too_many_requests" && wait.localizedDescription == "Too many attempts: try again in 5 minutes.")
 
         // An answer that is not the OAuth error shape still says something.
         let broken = Stub { _, _ in (502, "<html>") }
-        let gateway = TokenClient(baseURL: broken.base, store: MemoryTokenStore(), session: broken.session)
+        let gateway = TokenClient(baseURL: broken.base, endpoints: broken.endpoints, store: MemoryTokenStore(), session: broken.session)
         let bad = try await #require(throws: AuthError.self) { try await gateway.signIn(username: "ada", password: "x") }
         #expect(bad.status == 502 && bad.code == nil && !(bad.errorDescription ?? "").isEmpty)
 
         // A server with password sign-in turned off says so, and that is shown like the rest.
         let off = Stub { _, _ in Stub.oauthError(400, "unsupported_grant_type", "Password sign-in is turned off on this server.") }
-        let disabled = TokenClient(baseURL: off.base, store: MemoryTokenStore(), session: off.session)
+        let disabled = TokenClient(baseURL: off.base, endpoints: off.endpoints, store: MemoryTokenStore(), session: off.session)
         let refused = try await #require(throws: AuthError.self) { try await disabled.signIn(username: "ada", password: "x") }
         #expect(refused.code == "unsupported_grant_type" && refused.localizedDescription == "Password sign-in is turned off on this server.")
     }
@@ -178,7 +187,7 @@ struct AuthTests {
         }
         // A relaunch: the refresh token is stored, no access token yet.
         let store = MemoryTokenStore("r1")
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         #expect(auth.isSignedIn)
         #expect(try await auth.accessToken() == "a2")
         let request = try #require(stub.requests(to: "/oauth/token").first)
@@ -194,7 +203,7 @@ struct AuthTests {
         }
         let clock = Mutex(Date(timeIntervalSince1970: 1_000_000))
         let store = MemoryTokenStore()
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session, now: { clock.withLock { $0 } })
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session, now: { clock.withLock { $0 } })
         try await auth.signIn(username: "ada", password: "pw")
         clock.withLock { $0 += 3600 - 61 }
         #expect(try await auth.accessToken() == "a1")
@@ -212,7 +221,7 @@ struct AuthTests {
         }
         let signedOut = Counter()
         let store = MemoryTokenStore("revoked")
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session, onSignedOut: { _ = signedOut.next() })
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session, onSignedOut: { _ = signedOut.next() })
         let api = SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session)
 
         // The API reports it as UNAUTHENTICATED, so the app has one thing to check.
@@ -230,7 +239,7 @@ struct AuthTests {
     @Test func aNetworkFailureOnRefreshKeepsTheSignIn() async throws {
         let stub = Stub { _, _ in (503, "") }
         let store = MemoryTokenStore("r1")
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         let api = SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session)
         await #expect(throws: AuthError.self) { try await api.systems() }
         #expect(store.load() == "r1")
@@ -244,7 +253,7 @@ struct AuthTests {
             return Stub.tokens("a2", "r2")
         }
         let store = MemoryTokenStore("r1")
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         let tokens = try await withThrowingTaskGroup(of: String?.self) { group in
             for _ in 0..<8 { group.addTask { try await auth.accessToken() } }
             return try await group.reduce(into: []) { $0.append($1) }
@@ -267,7 +276,7 @@ struct AuthTests {
             }
         }
         let store = MemoryTokenStore()
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         let api = SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session)
         try await api.signIn(username: "ada", password: "pw")
 
@@ -287,7 +296,7 @@ struct AuthTests {
         // Only once: a token the server keeps refusing ends in the error, not a loop.
         let refusing = Stub { request, _ in request.path == "/graphql" ? Stub.unauthenticated : Stub.tokens("b", "r") }
         let stubborn = SovEmuAPI(
-            baseURL: refusing.base, auth: TokenClient(baseURL: refusing.base, store: MemoryTokenStore("r0"), session: refusing.session),
+            baseURL: refusing.base, auth: TokenClient(baseURL: refusing.base, endpoints: refusing.endpoints, store: MemoryTokenStore("r0"), session: refusing.session),
             session: refusing.session)
         let error = try await #require(throws: APIError.self) { try await stubborn.systems() }
         #expect(error.isUnauthenticated)
@@ -297,7 +306,7 @@ struct AuthTests {
     @Test func viewerGoesWithoutATokenWhenSignedOut() async throws {
         let stub = Stub { _, _ in (200, #"{"data":{"viewer":{"setupRequired":true,"user":null}}}"#) }
         let api = SovEmuAPI(
-            baseURL: stub.base, auth: TokenClient(baseURL: stub.base, store: MemoryTokenStore(), session: stub.session), session: stub.session)
+            baseURL: stub.base, auth: TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: MemoryTokenStore(), session: stub.session), session: stub.session)
         #expect(try await api.status().setupRequired)
         #expect(stub.requests.map(\.path) == ["/graphql"])
         #expect(stub.requests.first?.authorization == nil)
@@ -306,7 +315,7 @@ struct AuthTests {
     @Test func signOutRevokesAndForgetsWhateverHappens() async throws {
         let stub = Stub { request, _ in request.path == "/oauth/revoke" ? (500, "") : Stub.tokens("a1", "r1") }
         let store = MemoryTokenStore()
-        let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: store, session: stub.session)
         try await auth.signIn(username: "ada", password: "pw")
         await auth.signOut()
         let revoke = try #require(stub.requests(to: "/oauth/revoke").first)
@@ -315,7 +324,9 @@ struct AuthTests {
         #expect(try await auth.accessToken() == nil)
 
         // Offline: still signed out.
-        let offline = TokenClient(baseURL: URL(string: "http://unreachable.test:8080")!, store: MemoryTokenStore("r9"), session: stub.session)
+        let nowhere = URL(string: "http://unreachable.test:8080")!
+        let offline = TokenClient(
+            baseURL: nowhere, endpoints: Stub.endpoints(nowhere), store: MemoryTokenStore("r9"), session: stub.session)
         await offline.signOut()
         #expect(!offline.isSignedIn)
     }
@@ -330,5 +341,100 @@ struct AuthTests {
         let left = (storage.cookies ?? []).filter { $0.domain == domain }.map(\.name)
         #expect(left == ["other"])
         storage.cookies(for: URL(string: "http://\(domain)/")!)?.forEach(storage.deleteCookie)
+    }
+}
+
+/// `bootstrapConfig`: the anonymous query the app asks first, whose answer names the client id
+/// and every sign-in URL (the app hard-codes no path but `/graphql`).
+struct BootstrapTests {
+    static func reply(_ config: [String: Any?]) -> (Int, String) {
+        let fields = config.mapValues { $0 ?? NSNull() }
+        return (200, Stub.json(["data": ["bootstrapConfig": fields]]))
+    }
+
+    @Test func theAnswerDrivesTheUrlsAndClientId() async throws {
+        let stub = Stub { request, _ in
+            switch request.path {
+            case "/graphql":
+                // Paths the app could not guess, to show it takes them from the answer.
+                Self.reply([
+                    "signInAvailable": true, "address": "stub", "issuer": "http://stub", "webClientId": "web",
+                    "nativeClientId": "phone-app", "authorizationEndpoint": "/sso/authorize", "tokenEndpoint": "/sso/token",
+                    "revocationEndpoint": "/sso/revoke", "deviceAuthorizationEndpoint": "/sso/device", "verificationUri": "/link",
+                    "passwordEndpoint": "/sso/native/password",
+                ])
+            case "/sso/native/password": Stub.tokens("a1", "r1")
+            case "/sso/token": Stub.tokens("a2", "r2")
+            default: (404, "")
+            }
+        }
+        let store = MemoryTokenStore()
+        let auth = TokenClient(baseURL: stub.base, endpoints: nil, store: store, session: stub.session)
+        let api = SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session)
+
+        let config = try await api.bootstrap()
+        #expect(config.signInProblem == nil)
+        #expect(stub.requests.first?.authorization == nil, "asked without a token")
+        // Relative endpoints are resolved against the server address.
+        #expect(await auth.endpoints == SignInEndpoints(
+            clientId: "phone-app", token: stub.base.appending(path: "sso/token"),
+            revocation: stub.base.appending(path: "sso/revoke"), password: stub.base.appending(path: "sso/native/password")))
+
+        try await api.signIn(username: "ada", password: "pw")
+        #expect(try await auth.refresh(replacing: "a1") == "a2")
+        await api.signOut()
+        #expect(stub.requests.map(\.path) == ["/graphql", "/sso/native/password", "/sso/token", "/sso/revoke"])
+        #expect(stub.requests.dropFirst().allSatisfy { $0.form["client_id"] == "phone-app" })
+        #expect(store.load() == nil)
+    }
+
+    @Test func anAddressOutsidePublicUrlCannotSignIn() async throws {
+        let stub = Stub { _, _ in Self.reply(["signInAvailable": false, "address": "192.168.1.20:8080"]) }
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: MemoryTokenStore(), session: stub.session)
+        let config = try await SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session).bootstrap()
+        #expect(config.signInProblem == "Signing in isn't available at 192.168.1.20:8080. Add it to SOVEMU_PUBLIC_URL on the server.")
+        #expect(config.endpoints(relativeTo: stub.base) == nil)
+        #expect(await auth.endpoints == nil, "a fresh answer replaces the stored endpoints")
+        await #expect(throws: AuthError.notConfigured) { try await auth.signIn(username: "ada", password: "pw") }
+        #expect(stub.requests.count == 1)
+    }
+
+    @Test func aServerWithoutPasswordSignInSaysSo() async throws {
+        let stub = Stub { _, _ in
+            Self.reply([
+                "signInAvailable": true, "address": "tv.local", "nativeClientId": "sovemu-native",
+                "tokenEndpoint": "http://tv.local/oauth/token", "revocationEndpoint": "http://tv.local/oauth/revoke",
+                "deviceAuthorizationEndpoint": "http://tv.local/oauth/device_authorization", "passwordEndpoint": nil,
+            ])
+        }
+        let store = MemoryTokenStore()
+        let auth = TokenClient(baseURL: stub.base, endpoints: nil, store: store, session: stub.session)
+        let config = try await SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session).bootstrap()
+        let message = "This server signs in with a code shown on the screen, which this version of the app can't do yet."
+        #expect(config.signInProblem == message)
+        // Refresh and sign-out still have their endpoints; only the password is missing.
+        let endpoints = await auth.endpoints
+        #expect(endpoints?.password == nil && endpoints?.token.absoluteString == "http://tv.local/oauth/token")
+        let error = try await #require(throws: AuthError.self) { try await auth.signIn(username: "ada", password: "pw") }
+        #expect(error.localizedDescription == message)
+        #expect(stub.requests.count == 1, "nothing sent")
+    }
+
+    @Test func refreshWaitsForTheBootstrapAnswerWithoutSigningOut() async throws {
+        let stub = Stub { _, _ in (500, "") }
+        let store = MemoryTokenStore("r1")
+        let auth = TokenClient(baseURL: stub.base, endpoints: nil, store: store, session: stub.session)
+        await #expect(throws: AuthError.notConfigured) { try await auth.accessToken() }
+        #expect(store.load() == "r1" && stub.requests.isEmpty)
+    }
+
+    @Test func asksForEveryField() throws {
+        for field in ["signInAvailable", "address", "nativeClientId", "tokenEndpoint", "revocationEndpoint", "passwordEndpoint"] {
+            #expect(Documents.bootstrapConfig.contains(field))
+        }
+        #expect(Documents.bootstrapConfig.hasPrefix("query BootstrapConfig { bootstrapConfig {"))
+        // A persisted answer reads back the same.
+        let config = BootstrapConfig(signInAvailable: true, address: "a", nativeClientId: "n", tokenEndpoint: "http://a/t", passwordEndpoint: "http://a/p")
+        #expect(try JSONDecoder().decode(BootstrapConfig.self, from: JSONEncoder().encode(config)) == config)
     }
 }

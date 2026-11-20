@@ -14,31 +14,61 @@ struct SovEmuApp: App {
     }
 }
 
-/// The server address (kept across launches) and the API client for it. Signed in means a
-/// refresh token for that server is in the Keychain; the access token lives in the client.
+/// The server address and its `bootstrapConfig` (both kept across launches) and the API client
+/// for it. Signed in means a refresh token for that server is in the Keychain; the access token
+/// lives in the client.
 @Observable
 final class AppModel {
     var serverURL: String = UserDefaults.standard.string(forKey: "server") ?? "" {
         didSet {
             UserDefaults.standard.set(serverURL, forKey: "server")
-            if serverURL != oldValue { api = makeAPI() }
+            if serverURL != oldValue {
+                bootstrap = nil
+                api = makeAPI()
+            }
         }
     }
     var signedIn = false
+    /// How to sign in at `serverURL`: the server's last answer, kept so that refreshing a token
+    /// works on a start without the server, and asked again whenever it can be.
+    private(set) var bootstrap: BootstrapConfig?
     /// One client per server address, so its token refreshes are shared by every screen.
     @ObservationIgnored private(set) var api: SovEmuAPI?
+
+    /// What is stored: the answer with the address it came from.
+    private struct SavedBootstrap: Codable {
+        let server: String
+        let config: BootstrapConfig
+    }
+    private static let bootstrapKey = "bootstrap"
 
     init() {
         // Before tokens the server signed in with a cookie; it means nothing now.
         SovEmuAPI.clearLegacySessionCookie()
+        if let data = UserDefaults.standard.data(forKey: Self.bootstrapKey),
+           let saved = try? JSONDecoder().decode(SavedBootstrap.self, from: data), saved.server == serverURL {
+            bootstrap = saved.config
+        }
         api = makeAPI()
         signedIn = api?.isSignedIn ?? false
     }
 
+    /// Asks the server how to sign in (also the check that a SovEmu server answers there), and
+    /// keeps the answer.
+    @discardableResult
+    func refreshBootstrap() async throws -> BootstrapConfig {
+        guard let api else { throw URLError(.badURL) }
+        let config = try await api.bootstrap()
+        bootstrap = config
+        UserDefaults.standard.set(try? JSONEncoder().encode(SavedBootstrap(server: serverURL, config: config)), forKey: Self.bootstrapKey)
+        return config
+    }
+
     private func makeAPI() -> SovEmuAPI? {
-        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)) else { return nil }
+        guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)), url.host() != nil else { return nil }
         // The server refused the refresh token (expired or revoked): back to the sign-in screen.
-        let auth = TokenClient(baseURL: url, store: KeychainTokenStore(server: url), onSignedOut: { [weak self] in
+        let endpoints = bootstrap?.endpoints(relativeTo: url)
+        let auth = TokenClient(baseURL: url, endpoints: endpoints, store: KeychainTokenStore(server: url), onSignedOut: { [weak self] in
             Task { @MainActor in self?.signedIn = false }
         })
         return SovEmuAPI(baseURL: url, auth: auth)
@@ -82,6 +112,9 @@ struct RootView: View {
             }
         }
         .task {
+            // Ask how to sign in first, each launch the server answers; offline, the stored
+            // answer stands.
+            if model.api != nil { _ = try? await model.refreshBootstrap() }
             // A stored refresh token is a sign-in; asking who we are refreshes it, and ends it
             // if the server no longer honours it. Offline, stay signed in: the next screen says
             // what is wrong.

@@ -4,9 +4,10 @@ import Synchronization
 import Security
 #endif
 
-// MARK: - Sign-in: the server's OAuth 2 token endpoint, as the public client `sovemu-native`
+// MARK: - Sign-in: the server's OAuth 2 endpoints, as its native (public) client
 //
-// Sign in with the password grant, keep the access token in memory and the refresh token in a
+// Where to sign in comes from the server's `bootstrapConfig` (`SignInEndpoints`): the app
+// hard-codes no path but `/graphql`. Sign in with a password (its `passwordEndpoint`), keep the access token in memory and the refresh token in a
 // `RefreshTokenStore` (the Keychain in the app). Refresh tokens rotate: every refresh returns a
 // new one, which replaces the old. "Signed in" means a refresh token is stored.
 
@@ -68,7 +69,7 @@ public struct KeychainTokenStore: RefreshTokenStore {
 }
 #endif
 
-/// A failed call to `/oauth/token`: the server's `error` code (`invalid_grant`,
+/// A failed call to the token or password endpoint: the server's `error` code (`invalid_grant`,
 /// `too_many_requests` …) and its `error_description`, which is meant for people.
 public struct AuthError: Error, LocalizedError, Sendable, Equatable {
     public let status: Int
@@ -91,16 +92,36 @@ public struct AuthError: Error, LocalizedError, Sendable, Equatable {
 
     /// No refresh token is stored, or the sign-in ended while a refresh was in flight.
     static let signedOut = AuthError(status: 0, code: "signed_out", message: "Sign in again.")
+
+    /// The server's `bootstrapConfig` has not been read yet (an offline first start).
+    static let notConfigured = AuthError(
+        status: 0, code: "not_configured", message: "The server could not be reached to learn how to sign in.")
+
+    /// The server has no password sign-in (`passwordEndpoint` is null).
+    static let passwordUnavailable = AuthError(status: 0, code: "unsupported_grant_type", message: BootstrapConfig.codeOnlyMessage)
 }
 
-/// `/oauth/token`'s answer to both grants.
+/// What the client needs from `bootstrapConfig` to sign in, refresh and sign out.
+public struct SignInEndpoints: Codable, Sendable, Equatable {
+    public let clientId: String
+    public let token: URL
+    public let revocation: URL?
+    /// Nil when the server has turned password sign-in off.
+    public let password: URL?
+
+    public init(clientId: String, token: URL, revocation: URL?, password: URL?) {
+        (self.clientId, self.token, self.revocation, self.password) = (clientId, token, revocation, password)
+    }
+}
+
+/// The token endpoint's answer (also the password endpoint's).
 struct TokenResponse: Decodable {
     let access_token: String
     let expires_in: Double?
     let refresh_token: String?
 }
 
-/// `/oauth/token`'s answer when it refuses.
+/// The token or password endpoint's answer when it refuses.
 struct OAuthErrorBody: Decodable {
     let error: String
     let error_description: String?
@@ -110,12 +131,13 @@ struct OAuthErrorBody: Decodable {
 /// need a token while one is in flight wait for it (refresh tokens rotate, so two refreshes
 /// with the same token would be one too many).
 public actor TokenClient {
-    public static let clientId = "sovemu-native"
     public static let scope = "openid profile offline_access"
     /// Refresh when the access token has less than this left.
     static let margin: TimeInterval = 60
 
     public nonisolated let baseURL: URL
+    /// From the server's `bootstrapConfig`; nil until it has been read.
+    public private(set) var endpoints: SignInEndpoints?
     private nonisolated let store: any RefreshTokenStore
     private let session: URLSession
     private let now: @Sendable () -> Date
@@ -130,10 +152,11 @@ public actor TokenClient {
     /// - Parameter onSignedOut: called when the server refuses the refresh token
     ///   (`invalid_grant`): the tokens are gone and the app should show the sign-in screen.
     public init(
-        baseURL: URL, store: any RefreshTokenStore, session: URLSession = SovEmuAPI.makeSession(),
-        now: @escaping @Sendable () -> Date = { Date() }, onSignedOut: (@Sendable () -> Void)? = nil
+        baseURL: URL, endpoints: SignInEndpoints?, store: any RefreshTokenStore,
+        session: URLSession = SovEmuAPI.makeSession(), now: @escaping @Sendable () -> Date = { Date() }, onSignedOut: (@Sendable () -> Void)? = nil
     ) {
         self.baseURL = baseURL
+        self.endpoints = endpoints
         self.store = store
         self.session = session
         self.now = now
@@ -143,14 +166,19 @@ public actor TokenClient {
     /// A refresh token is stored.
     public nonisolated var isSignedIn: Bool { store.load() != nil }
 
+    /// Takes the endpoints from a fresh `bootstrapConfig` (nil: the server offers no sign-in here).
+    public func setEndpoints(_ endpoints: SignInEndpoints?) { self.endpoints = endpoints }
+
     /// Signs in with a password. Throws `AuthError` (with the server's description) when refused:
     /// `invalid_grant` (wrong password), `too_many_requests`, `unsupported_grant_type` (password
     /// sign-in turned off) …
     public func signIn(username: String, password: String) async throws {
+        guard let endpoints else { throw AuthError.notConfigured }
+        guard let passwordURL = endpoints.password else { throw AuthError.passwordUnavailable }
         // The server's own route for the apps' password sign-in (OAuth 2.1 has no password
-        // grant): no `grant_type`, the same token answer and OAuth errors as `/oauth/token`.
-        let tokens = try await requestToken(path: "oauth/password", [
-            ("client_id", Self.clientId), ("username", username), ("password", password), ("scope", Self.scope),
+        // grant): no `grant_type`, the same token answer and OAuth errors as the token endpoint.
+        let tokens = try await requestToken(passwordURL, [
+            ("client_id", endpoints.clientId), ("username", username), ("password", password), ("scope", Self.scope),
         ])
         guard tokens.refresh_token != nil else {
             throw AuthError(status: 200, code: "invalid_response", message: "The server did not return a refresh token.")
@@ -185,8 +213,10 @@ public actor TokenClient {
         let started = generation
         let tokens: TokenResponse
         do {
-            tokens = try await requestToken([
-                ("grant_type", "refresh_token"), ("client_id", Self.clientId), ("refresh_token", refreshToken),
+            // Not configured is not refused: the sign-in stays for when the server answers.
+            guard let endpoints else { throw AuthError.notConfigured }
+            tokens = try await requestToken(endpoints.token, [
+                ("grant_type", "refresh_token"), ("client_id", endpoints.clientId), ("refresh_token", refreshToken),
             ])
         } catch let error as AuthError where error.isInvalidGrant {
             // Unless the user signed in (or out) meanwhile, this sign-in is over.
@@ -206,8 +236,8 @@ public actor TokenClient {
     public func signOut() async {
         let token = store.load()
         forget()
-        guard let token else { return }
-        var request = Self.formRequest(baseURL.appending(path: "oauth/revoke"), [("token", token), ("client_id", Self.clientId)])
+        guard let token, let endpoints, let revocation = endpoints.revocation else { return }
+        var request = Self.formRequest(revocation, [("token", token), ("client_id", endpoints.clientId)])
         request.timeoutInterval = 10
         _ = try? await session.data(for: request)
     }
@@ -225,8 +255,8 @@ public actor TokenClient {
         access = (tokens.access_token, now().addingTimeInterval(tokens.expires_in ?? 3600))
     }
 
-    private func requestToken(path: String = "oauth/token", _ fields: [(String, String)]) async throws -> TokenResponse {
-        let request = Self.formRequest(baseURL.appending(path: path), fields)
+    private func requestToken(_ url: URL, _ fields: [(String, String)]) async throws -> TokenResponse {
+        let request = Self.formRequest(url, fields)
         let (data, response) = try await session.data(for: request)
         return try Self.readToken(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
