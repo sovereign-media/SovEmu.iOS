@@ -143,11 +143,14 @@ public actor TokenClient {
     /// A refresh token is stored.
     public nonisolated var isSignedIn: Bool { store.load() != nil }
 
-    /// The password grant. Throws `AuthError` (with the server's description) when refused.
+    /// Signs in with a password. Throws `AuthError` (with the server's description) when refused:
+    /// `invalid_grant` (wrong password), `too_many_requests`, `unsupported_grant_type` (password
+    /// sign-in turned off) …
     public func signIn(username: String, password: String) async throws {
-        let tokens = try await requestToken([
-            ("grant_type", "password"), ("client_id", Self.clientId), ("username", username), ("password", password),
-            ("scope", Self.scope),
+        // The server's own route for the apps' password sign-in (OAuth 2.1 has no password
+        // grant): no `grant_type`, the same token answer and OAuth errors as `/oauth/token`.
+        let tokens = try await requestToken(path: "oauth/password", [
+            ("client_id", Self.clientId), ("username", username), ("password", password), ("scope", Self.scope),
         ])
         guard tokens.refresh_token != nil else {
             throw AuthError(status: 200, code: "invalid_response", message: "The server did not return a refresh token.")
@@ -222,8 +225,8 @@ public actor TokenClient {
         access = (tokens.access_token, now().addingTimeInterval(tokens.expires_in ?? 3600))
     }
 
-    private func requestToken(_ fields: [(String, String)]) async throws -> TokenResponse {
-        let request = Self.formRequest(baseURL.appending(path: "oauth/token"), fields)
+    private func requestToken(path: String = "oauth/token", _ fields: [(String, String)]) async throws -> TokenResponse {
+        let request = Self.formRequest(baseURL.appending(path: path), fields)
         let (data, response) = try await session.data(for: request)
         return try Self.readToken(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
     }

@@ -122,18 +122,19 @@ final class Counter: Sendable {
 /// Sign-in with the password grant, refresh (rotation, single flight, `invalid_grant`), sign-out,
 /// and the API's bearer header and retry, against the spec of `/oauth/token` and `/oauth/revoke`.
 struct AuthTests {
-    @Test func signsInWithThePasswordGrant() async throws {
+    @Test func signsInWithAPasswordAtItsOwnRoute() async throws {
         let stub = Stub { _, _ in Stub.tokens("a1", "r1") }
         let store = MemoryTokenStore()
         let auth = TokenClient(baseURL: stub.base, store: store, session: stub.session)
         #expect(!auth.isSignedIn)
 
         try await auth.signIn(username: "ada lovelace", password: "p&ss=w0rd")
-        let request = try #require(stub.requests(to: "/oauth/token").first)
+        #expect(stub.requests.map(\.path) == ["/oauth/password"])
+        let request = try #require(stub.requests.first)
         #expect(request.form == [
-            "grant_type": "password", "client_id": "sovemu-native", "username": "ada lovelace", "password": "p&ss=w0rd",
+            "client_id": "sovemu-native", "username": "ada lovelace", "password": "p&ss=w0rd",
             "scope": "openid profile offline_access",
-        ])
+        ], "no grant_type")
         #expect(store.load() == "r1" && auth.isSignedIn)
         // The access token is kept in memory and used until it nears its expiry.
         #expect(try await auth.accessToken() == "a1")
@@ -163,6 +164,12 @@ struct AuthTests {
         let gateway = TokenClient(baseURL: broken.base, store: MemoryTokenStore(), session: broken.session)
         let bad = try await #require(throws: AuthError.self) { try await gateway.signIn(username: "ada", password: "x") }
         #expect(bad.status == 502 && bad.code == nil && !(bad.errorDescription ?? "").isEmpty)
+
+        // A server with password sign-in turned off says so, and that is shown like the rest.
+        let off = Stub { _, _ in Stub.oauthError(400, "unsupported_grant_type", "Password sign-in is turned off on this server.") }
+        let disabled = TokenClient(baseURL: off.base, store: MemoryTokenStore(), session: off.session)
+        let refused = try await #require(throws: AuthError.self) { try await disabled.signIn(username: "ada", password: "x") }
+        #expect(refused.code == "unsupported_grant_type" && refused.localizedDescription == "Password sign-in is turned off on this server.")
     }
 
     @Test func refreshRotatesTheStoredRefreshToken() async throws {
@@ -182,7 +189,7 @@ struct AuthTests {
     @Test func refreshesWhenUnderAMinuteIsLeft() async throws {
         let refreshes = Counter()
         let stub = Stub { request, _ in
-            request.form["grant_type"] == "password" ? Stub.tokens("a1", "r1", expiresIn: 3600)
+            request.path == "/oauth/password" ? Stub.tokens("a1", "r1", expiresIn: 3600)
                 : Stub.tokens("a\(refreshes.next() + 1)", "r\(refreshes.count + 1)")
         }
         let clock = Mutex(Date(timeIntervalSince1970: 1_000_000))
@@ -249,9 +256,9 @@ struct AuthTests {
 
     @Test func apiSendsTheBearerTokenAndRetriesOnceAfterUnauthenticated() async throws {
         let stub = Stub { request, _ in
-            switch (request.path, request.form["grant_type"]) {
-            case ("/oauth/token", "password"): return Stub.tokens("a1", "r1")
-            case ("/oauth/token", _):
+            switch request.path {
+            case "/oauth/password": return Stub.tokens("a1", "r1")
+            case "/oauth/token":
                 try? await Task.sleep(for: .milliseconds(50))
                 return Stub.tokens("a2", "r2")
             default:
@@ -270,7 +277,8 @@ struct AuthTests {
             return try await group.reduce(into: []) { $0.append($1) }
         }
         #expect(results == [0, 0, 0, 0])
-        #expect(stub.requests(to: "/oauth/token").filter { $0.form["grant_type"] == "refresh_token" }.count == 1)
+        #expect(stub.requests(to: "/oauth/token").count == 1)
+        #expect(stub.requests(to: "/oauth/token").allSatisfy { $0.form["grant_type"] == "refresh_token" })
         #expect(store.load() == "r2")
         let graphql = stub.requests(to: "/graphql")
         #expect(graphql.count == 8 && graphql.allSatisfy { $0.authorization?.hasPrefix("Bearer a") == true })
