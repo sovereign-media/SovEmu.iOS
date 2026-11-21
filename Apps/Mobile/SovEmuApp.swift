@@ -71,7 +71,9 @@ final class AppModel {
         let auth = TokenClient(baseURL: url, endpoints: endpoints, store: KeychainTokenStore(server: url), onSignedOut: { [weak self] in
             Task { @MainActor in self?.signedIn = false }
         })
-        return SovEmuAPI(baseURL: url, auth: auth)
+        let api = SovEmuAPI(baseURL: url, auth: auth)
+        ClientEvents.api = api
+        return api
     }
 
     func signOut() async {

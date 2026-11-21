@@ -23,6 +23,8 @@ struct PlayerView: View {
     @State private var session: SessionInfo?
     @State private var stream: Stream?
     @State private var status = "Starting…"
+    /// The stream has connected once: a failure after that is a lost connection.
+    @State private var everConnected = false
     @State private var menuOpen = false
     @State private var showTouch = GCController.controllers().isEmpty
     /// The disc in the tray after a change (a multi-disc game); the session says until then.
@@ -173,7 +175,14 @@ struct PlayerView: View {
             controller.mappings = (try? await Mappings.fetch(system: system.id, with: api)) ?? Mappings(system: system.id)
             controls = try? await api.controls(system: system.id)
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
-            s.onState = { state in if state == .failed { status = "Connection failed" } }
+            s.onState = { state in
+                if state == .failed { status = "Connection failed" }
+                if state == .connected { everConnected = true }
+                if state == .failed || state == .disconnected {
+                    let kind: ClientEventKind = everConnected ? .connectionLost : .connectionFailed
+                    ClientEvents.report(kind, "WebRTC \(state == .failed ? "failed" : "disconnected")", sessionId: info.id)
+                }
+            }
             s.onMenu = {
                 // The press that just closed the menu (Escape, Home) must not reopen it.
                 if !menuOpen && Date().timeIntervalSince(gameMenu?.closedAt ?? .distantPast) > 0.3 { menuOpen = true }

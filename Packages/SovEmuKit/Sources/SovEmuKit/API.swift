@@ -365,6 +365,7 @@ public struct APIError: Error, LocalizedError, Sendable {
 public enum GraphQLValue: Encodable, Sendable, Equatable {
     case string(String)
     case int(Int)
+    case double(Double)
     case bool(Bool)
     case list([GraphQLValue])
     case object([String: GraphQLValue])
@@ -375,6 +376,7 @@ public enum GraphQLValue: Encodable, Sendable, Equatable {
         switch self {
         case .string(let v): try c.encode(v)
         case .int(let v): try c.encode(v)
+        case .double(let v): try c.encode(v)
         case .bool(let v): try c.encode(v)
         case .list(let v): try c.encode(v)
         case .object(let v): try c.encode(v)
@@ -414,6 +416,10 @@ enum Documents {
         """
     static let sessionOffer = "mutation SessionOffer($id: ID!, $sdp: String!) { sessionOffer(id: $id, sdp: $sdp) }"
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
+    static let reportClientEvents = """
+        mutation ReportClientEvents($client: String!, $events: [ClientEventInput!]!) { \
+        reportClientEvents(client: $client, events: $events) }
+        """
     static let setDisc = "mutation SetDisc($sessionId: ID!, $disc: Int!) { setDisc(sessionId: $sessionId, disc: $disc) }"
     static let saveState = "mutation SaveState($sessionId: ID!, $slot: Int!) { saveState(sessionId: $sessionId, slot: $slot) }"
     static let loadState = "mutation LoadState($sessionId: ID!, $slot: Int!) { loadState(sessionId: $sessionId, slot: $slot) }"
@@ -625,6 +631,27 @@ public final class SovEmuAPI: Sendable {
     /// The mappings in force for this user on a system (nil: on every system), one per model:
     /// their own for the system, their own for every system, the default for the system, the
     /// default for every system. A model missing from the list uses the built-in defaults.
+    /// Sends what went wrong on this device to the server's log (`client event`); returns how
+    /// many it logged. Callers drop a failure: a report must not get in the player's way.
+    @discardableResult
+    public func reportClientEvents(client: String, events: [ClientEvent]) async throws -> Int {
+        guard isSignedIn, !events.isEmpty else { return 0 }
+        return try await post(Documents.reportClientEvents, Self.eventVariables(client: client, events: events),
+                              field: "reportClientEvents")
+    }
+
+    static func eventVariables(client: String, events: [ClientEvent]) -> [String: GraphQLValue] {
+        let list = events.map { e -> GraphQLValue in
+            .object([
+                "kind": .string(e.kind.rawValue),
+                "message": .string(e.message),
+                "sessionId": e.sessionId.map(GraphQLValue.string) ?? .null,
+                "at": .double(e.at),
+            ])
+        }
+        return ["client": .string(client), "events": .list(list)]
+    }
+
     public func controllerMappings(system: String?) async throws -> [ControllerMapping] {
         try await post(Documents.controllerMappings, ["system": Self.system(system)], field: "controllerMappings")
     }
