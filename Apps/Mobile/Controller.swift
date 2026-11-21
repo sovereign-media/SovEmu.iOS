@@ -72,6 +72,10 @@ final class Controller {
         defer { lock.unlock() }
         identities[ObjectIdentifier(controller)] = identity
         players.join(ObjectIdentifier(controller))
+        // A model SovEmu's docs/CONTROLLERS.md does not know yet: worth adding.
+        if identity.id.hasPrefix("pad:") {
+            ClientEvents.report(.controllerUnknown, "\(controller.productCategory) / \(controller.vendorName ?? "?") → \(identity.id)")
+        }
     }
 
     private func leave(_ controller: GCController) {
