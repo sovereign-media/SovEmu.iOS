@@ -109,28 +109,45 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     public let needsGpu: Bool
     /// For a 3D system: `GPU`, `SOFTWARE` (slow) or `OFF`.
     public let rendering: String?
+    /// A BIOS file it cannot start games without is missing.
+    public let biosMissing: Bool
 
-    static let fields = "id name short manufacturer year color gameCount playable needsGpu rendering"
+    static let fields = "id name short manufacturer year color gameCount playable needsGpu rendering biosMissing"
+
+    public init(
+        id: String, name: String, short: String, manufacturer: String = "", year: Int = 0, color: String = "#4169e1",
+        gameCount: Int = 0, playable: Bool = true, needsGpu: Bool = false, rendering: String? = nil, biosMissing: Bool = false
+    ) {
+        (self.id, self.name, self.short, self.manufacturer, self.year, self.color) = (id, name, short, manufacturer, year, color)
+        (self.gameCount, self.playable, self.needsGpu, self.rendering, self.biosMissing) =
+            (gameCount, playable, needsGpu, rendering, biosMissing)
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, name, short, manufacturer, year, color, gameCount, playable, needsGpu, rendering, biosMissing
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        short = try c.decode(String.self, forKey: .short)
+        manufacturer = try c.decode(String.self, forKey: .manufacturer)
+        year = try c.decode(Int.self, forKey: .year)
+        color = try c.decode(String.self, forKey: .color)
+        gameCount = try c.decode(Int.self, forKey: .gameCount)
+        playable = try c.decode(Bool.self, forKey: .playable)
+        needsGpu = try c.decode(Bool.self, forKey: .needsGpu)
+        rendering = try c.decodeIfPresent(String.self, forKey: .rendering)
+        // A server from before it said is taken at its word that nothing is missing.
+        biosMissing = try c.decodeIfPresent(Bool.self, forKey: .biosMissing) ?? false
+    }
 
     /// The accent colour as (red, green, blue) in 0...1.
     public var rgb: (Double, Double, Double) {
         let value = Int(color.dropFirst(), radix: 16) ?? 0x4169e1
         return (Double((value >> 16) & 0xff) / 255, Double((value >> 8) & 0xff) / 255, Double(value & 0xff) / 255)
     }
-}
-
-public struct Game: Codable, Sendable, Identifiable, Hashable {
-    public let id: Int64
-    public let system: String
-    public let title: String
-    /// No-Intro tags from the file name: "USA", "Rev 1" …
-    public let tags: [String]
-    /// Bytes (a GraphQL `Float`).
-    public let size: Double
-    public let lastPlayedAt: String?
-    public let playCount: Int
-
-    static let fields = "id system title tags size lastPlayedAt playCount"
 }
 
 /// `GameSession`: a running game.
@@ -412,8 +429,40 @@ enum Documents {
     static let systems = "query Systems { systems { \(SystemSummary.fields) } }"
     static let games = "query Games($system: ID!) { system(id: $system) { games { \(Game.fields) } } }"
     static let startSession = """
-        mutation StartSession($gameId: Int!) { startSession(gameId: $gameId) { \(SessionInfo.fields) } }
+        mutation StartSession($gameId: Int!, $startId: String) { \
+        startSession(gameId: $gameId, startId: $startId) { \(SessionInfo.fields) } }
         """
+    static let startProgress = """
+        query StartProgress($startId: String!) { startProgress(startId: $startId) { \(StartStatus.fields) } }
+        """
+    static let home = """
+        query Home { home { featured { \(Game.fields) } recent { \(Game.fields) } added { \(Game.fields) } \
+        favourites { \(Game.fields) } } collections { id name games { \(Game.fields) } } }
+        """
+    static let search = "query Search($text: String!) { search(text: $text) { \(Game.fields) } }"
+    static let patches = "query Patches($id: Int!) { game(id: $id) { patches { id name isDefault } } }"
+    static let setPatch = "mutation SetPatch($gameId: Int!, $patchId: Int) { setPatch(gameId: $gameId, patchId: $patchId) }"
+    static let decoration = "query GameDecoration($id: Int!) { game(id: $id) { decoration { \(GameDecoration.fields) } } }"
+    static let collectionChoices = "query CollectionChoices($id: Int!) { collections { id name } game(id: $id) { collectionIds } }"
+    static let setFavourite = """
+        mutation SetFavourite($gameId: Int!, $favourite: Boolean!) { setFavourite(gameId: $gameId, favourite: $favourite) }
+        """
+    static let createCollection = "mutation CreateCollection($name: String!) { createCollection(name: $name) { id name } }"
+    static let setInCollection = """
+        mutation SetInCollection($collectionId: Int!, $gameId: Int!, $member: Boolean!) { \
+        setInCollection(collectionId: $collectionId, gameId: $gameId, member: $member) }
+        """
+    static let saves = "query Saves($id: Int!) { game(id: $id) { saves { \(SaveSlot.fields) } } }"
+    static let cheats = "query Cheats($id: Int!) { game(id: $id) { cheats { \(Cheat.fields) } } }"
+    static let addCheat = """
+        mutation AddCheat($gameId: Int!, $code: String!, $description: String!) { \
+        addCheat(gameId: $gameId, code: $code, description: $description) { \(Cheat.fields) } }
+        """
+    static let setCheatEnabled = """
+        mutation SetCheatEnabled($gameId: Int!, $cheatId: Int!, $enabled: Boolean!) { \
+        setCheatEnabled(gameId: $gameId, cheatId: $cheatId, enabled: $enabled) { \(Cheat.fields) } }
+        """
+    static let deleteCheat = "mutation DeleteCheat($gameId: Int!, $cheatId: Int!) { deleteCheat(gameId: $gameId, cheatId: $cheatId) }"
     static let sessionOffer = """
         mutation SessionOffer($id: ID!, $sdp: String!, $client: String) { \
         sessionOffer(id: $id, sdp: $sdp, client: $client) }
@@ -609,8 +658,106 @@ public final class SovEmuAPI: Sendable {
         guard let found else { throw APIError(status: 200, code: "NOT_FOUND", message: "No such system.") }
         return found.games
     }
-    public func startSession(gameId: Int64) async throws -> SessionInfo {
-        try await post(Documents.startSession, ["gameId": .int(Int(gameId))], field: "startSession")
+    /// Starts a game, named `startId` so its progress can be followed (`startProgress`).
+    public func startSession(gameId: Int64, startId: String? = nil) async throws -> SessionInfo {
+        try await post(Documents.startSession, ["gameId": .int(Int(gameId)), "startId": startId.map(GraphQLValue.string) ?? .null],
+                       field: "startSession")
+    }
+    /// How far the start named `startId` has got.
+    public func startProgress(startId: String) async throws -> StartStatus {
+        try await post(Documents.startProgress, ["startId": .string(startId)], field: "startProgress")
+    }
+
+    /// The home screen's rows, and a row per collection.
+    public func home() async throws -> HomeFeed {
+        struct Rows: Decodable { let featured, recent, added, favourites: [Game] }
+        struct Answer: Decodable { let home: Rows; let collections: [HomeCollection] }
+        let answer = try await send(Documents.home, [:]) { try Self.decodeData(Answer.self, from: $0, status: $1) }
+        return HomeFeed(featured: answer.home.featured, recent: answer.home.recent, added: answer.home.added,
+                        favourites: answer.home.favourites, collections: answer.collections)
+    }
+    /// Games on every system matching `text` (the server's first 48).
+    public func search(_ text: String) async throws -> [Game] {
+        try await post(Documents.search, ["text": .string(text)], field: "search")
+    }
+
+    /// One field of `game(id:)`.
+    private func gameField<T: Decodable>(_ document: String, _ id: Int64, _ field: String, as type: T.Type) async throws -> T {
+        let game: [String: T] = try await post(document, ["id": .int(Int(id))], field: "game")
+        guard let value = game[field] else { throw APIError(status: 200, message: "The server's answer had no \(field).") }
+        return value
+    }
+
+    public func patches(gameId: Int64) async throws -> [GamePatch] {
+        try await gameField(Documents.patches, gameId, "patches", as: [GamePatch].self)
+    }
+    /// Plays a game with a patch (nil: the original) from now on.
+    public func setPatch(gameId: Int64, patchId: Int?) async throws {
+        _ = try await post(Documents.setPatch, ["gameId": .int(Int(gameId)), "patchId": patchId.map(GraphQLValue.int) ?? .null],
+                           field: "setPatch", as: Bool.self)
+    }
+    /// The artwork to frame a game's picture with; nil when there is none.
+    public func decoration(gameId: Int64) async throws -> GameDecoration? {
+        try await gameField(Documents.decoration, gameId, "decoration", as: GameDecoration?.self)
+    }
+    /// This user's saves of a game.
+    public func saves(gameId: Int64) async throws -> [SaveSlot] {
+        try await gameField(Documents.saves, gameId, "saves", as: [SaveSlot].self)
+    }
+
+    public func setFavourite(gameId: Int64, favourite: Bool) async throws {
+        _ = try await post(Documents.setFavourite, ["gameId": .int(Int(gameId)), "favourite": .bool(favourite)],
+                           field: "setFavourite", as: Bool.self)
+    }
+    /// This user's collections, each saying whether the game is in it, by name.
+    public func collectionChoices(gameId: Int64) async throws -> [CollectionChoice] {
+        struct Named: Decodable { let id: Int; let name: String }
+        struct Member: Decodable { let collectionIds: [Int] }
+        struct Answer: Decodable { let collections: [Named]; let game: Member }
+        let answer = try await send(Documents.collectionChoices, ["id": .int(Int(gameId))]) {
+            try Self.decodeData(Answer.self, from: $0, status: $1)
+        }
+        let member = Set(answer.game.collectionIds)
+        return answer.collections.map { CollectionChoice(id: $0.id, name: $0.name, member: member.contains($0.id)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+    /// Makes a collection (its name trimmed to 64 characters); returns its id.
+    public func createCollection(name: String) async throws -> Int {
+        struct Created: Decodable { let id: Int }
+        let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
+        let created: Created = try await post(Documents.createCollection, ["name": .string(trimmed)], field: "createCollection")
+        return created.id
+    }
+    public func setInCollection(collectionId: Int, gameId: Int64, member: Bool) async throws {
+        _ = try await post(Documents.setInCollection,
+                           ["collectionId": .int(collectionId), "gameId": .int(Int(gameId)), "member": .bool(member)],
+                           field: "setInCollection", as: Bool.self)
+    }
+
+    /// This user's cheats for a game.
+    public func cheats(gameId: Int64) async throws -> [Cheat] {
+        try await gameField(Documents.cheats, gameId, "cheats", as: [Cheat].self)
+    }
+    /// Adds a cheat; returns the game's cheats after it.
+    public func addCheat(gameId: Int64, code: String, description: String) async throws -> [Cheat] {
+        try await post(Documents.addCheat, ["gameId": .int(Int(gameId)), "code": .string(code), "description": .string(description)],
+                       field: "addCheat")
+    }
+    /// Turns a cheat on or off (a running session applies it at once); returns the game's cheats.
+    public func setCheatEnabled(gameId: Int64, cheatId: Int, enabled: Bool) async throws -> [Cheat] {
+        try await post(Documents.setCheatEnabled, ["gameId": .int(Int(gameId)), "cheatId": .int(cheatId), "enabled": .bool(enabled)],
+                       field: "setCheatEnabled")
+    }
+    public func deleteCheat(gameId: Int64, cheatId: Int) async throws {
+        _ = try await post(Documents.deleteCheat, ["gameId": .int(Int(gameId)), "cheatId": .int(cheatId)],
+                           field: "deleteCheat", as: Bool.self)
+    }
+
+    /// A `/media/…` path the API handed out, as a full URL on this server (an absolute one as it is).
+    public func media(_ path: String?) -> URL? {
+        guard let path, !path.isEmpty else { return nil }
+        if path.hasPrefix("http://") || path.hasPrefix("https://") { return URL(string: path) }
+        return URL(string: path, relativeTo: baseURL)?.absoluteURL
     }
     /// Sends the complete WebRTC offer SDP, naming the client (`ios 0.1.0 (iPad, iPadOS 18.1)`,
     /// shown on the admin's sessions page); returns the worker's answer SDP.
