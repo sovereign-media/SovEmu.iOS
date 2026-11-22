@@ -12,6 +12,9 @@ public enum WireProtocol {
     static let typeHotkeys: UInt8 = 0x02
     static let typeAnalog: UInt8 = 0x03
     static let typeAck: UInt8 = 0x81
+    static let typePipeline: UInt8 = 0x82
+    /// The longest pipeline message, header included.
+    public static let maxPipelineLength = 4096
 
     public static func encodeInput(seq: UInt32, clientTimeMs: UInt32, ports: [UInt16]) -> Data {
         let ports = ports.prefix(maxPorts)
@@ -81,6 +84,122 @@ public enum WireProtocol {
             UInt32(bytes[at]) | UInt32(bytes[at + 1]) << 8 | UInt32(bytes[at + 2]) << 16 | UInt32(bytes[at + 3]) << 24
         }
         return Ack(seq: u32(2), clientTimeMs: u32(6), frame: u32(10))
+    }
+
+    /// How the worker makes the stream (`0x82`: type, version, then a JSON object), sent when
+    /// the channel opens, on every change and every 2 s. Every key may be missing (an empty or
+    /// zero default) and unknown keys are ignored, as `Pipeline` in SovEmu.Protocol.
+    public struct Pipeline: Equatable, Sendable, Decodable {
+        /// The OpenGL renderer a 3D core draws with; nil for a core that draws on the CPU.
+        public var renderer: String?
+        /// The renderer is the software one (llvmpipe), not a GPU.
+        public var rendererSoftware: Bool
+        public var video: Video
+        public var audio: Audio
+        /// Frames the picture runs ahead of the game (0: off).
+        public var runAhead: Int
+
+        public init(renderer: String? = nil, rendererSoftware: Bool = false, video: Video = Video(),
+                    audio: Audio = Audio(), runAhead: Int = 0) {
+            (self.renderer, self.rendererSoftware, self.video, self.audio, self.runAhead) =
+                (renderer, rendererSoftware, video, audio, runAhead)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case renderer, video, audio
+            case rendererSoftware = "renderer_software", runAhead = "run_ahead"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            renderer = try c.decodeIfPresent(String.self, forKey: .renderer)
+            rendererSoftware = try c.decodeIfPresent(Bool.self, forKey: .rendererSoftware) ?? false
+            video = try c.decodeIfPresent(Video.self, forKey: .video) ?? Video()
+            audio = try c.decodeIfPresent(Audio.self, forKey: .audio) ?? Audio()
+            runAhead = try c.decodeIfPresent(Int.self, forKey: .runAhead) ?? 0
+        }
+
+        public struct Video: Equatable, Sendable, Decodable {
+            /// `h264` or `vp8`.
+            public var codec: String
+            /// `vaapi`, `nvenc`, `x264` or `libvpx`.
+            public var encoder: String
+            /// The encoder runs on a GPU.
+            public var hardware: Bool
+            /// Encoders tried before this one, in order, and why each was given up.
+            public var fallbacks: [Fallback]
+            /// The encoded picture, before the client scales it.
+            public var width: Int
+            public var height: Int
+            public var fps: Double
+
+            public init(codec: String = "", encoder: String = "", hardware: Bool = false, fallbacks: [Fallback] = [],
+                        width: Int = 0, height: Int = 0, fps: Double = 0) {
+                (self.codec, self.encoder, self.hardware, self.fallbacks) = (codec, encoder, hardware, fallbacks)
+                (self.width, self.height, self.fps) = (width, height, fps)
+            }
+
+            enum CodingKeys: String, CodingKey { case codec, encoder, hardware, fallbacks, width, height, fps }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                codec = try c.decodeIfPresent(String.self, forKey: .codec) ?? ""
+                encoder = try c.decodeIfPresent(String.self, forKey: .encoder) ?? ""
+                hardware = try c.decodeIfPresent(Bool.self, forKey: .hardware) ?? false
+                fallbacks = try c.decodeIfPresent([Fallback].self, forKey: .fallbacks) ?? []
+                width = try c.decodeIfPresent(Int.self, forKey: .width) ?? 0
+                height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0
+                fps = try c.decodeIfPresent(Double.self, forKey: .fps) ?? 0
+            }
+        }
+
+        /// An encoder given up, and why.
+        public struct Fallback: Equatable, Sendable, Decodable {
+            public var encoder: String
+            public var reason: String
+
+            public init(encoder: String = "", reason: String = "") {
+                (self.encoder, self.reason) = (encoder, reason)
+            }
+
+            enum CodingKeys: String, CodingKey { case encoder, reason }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                encoder = try c.decodeIfPresent(String.self, forKey: .encoder) ?? ""
+                reason = try c.decodeIfPresent(String.self, forKey: .reason) ?? ""
+            }
+        }
+
+        public struct Audio: Equatable, Sendable, Decodable {
+            /// `opus`.
+            public var codec: String
+            /// The core's own sample rate, resampled to 48 kHz.
+            public var sourceHz: Double
+            public var kbps: Int
+
+            public init(codec: String = "", sourceHz: Double = 0, kbps: Int = 0) {
+                (self.codec, self.sourceHz, self.kbps) = (codec, sourceHz, kbps)
+            }
+
+            enum CodingKeys: String, CodingKey { case codec, kbps, sourceHz = "source_hz" }
+
+            public init(from decoder: Decoder) throws {
+                let c = try decoder.container(keyedBy: CodingKeys.self)
+                codec = try c.decodeIfPresent(String.self, forKey: .codec) ?? ""
+                sourceHz = try c.decodeIfPresent(Double.self, forKey: .sourceHz) ?? 0
+                kbps = try c.decodeIfPresent(Int.self, forKey: .kbps) ?? 0
+            }
+        }
+    }
+
+    /// Decodes a pipeline message, or returns nil for anything else (another type or version,
+    /// too long, or a body that is not a JSON object of the expected shape).
+    public static func decodePipeline(_ data: Data) -> Pipeline? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 2, bytes.count <= maxPipelineLength, bytes[0] == typePipeline, bytes[1] == inputVersion
+        else { return nil }
+        return try? JSONDecoder().decode(Pipeline.self, from: Data(bytes[2...]))
     }
 }
 

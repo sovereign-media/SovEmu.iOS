@@ -15,6 +15,8 @@ final class Stream: NSObject {
     private let sessionId: String
     private let controller: Controller
     private let videoView: RTCVideoRenderer
+    /// Read on the main thread (`UIDevice`), when the stream is made.
+    private let clientName = ClientEvents.clientName
     private var pc: RTCPeerConnection!
     private var channel: RTCDataChannel!
     private var gathered: CheckedContinuation<Void, Never>?
@@ -34,6 +36,10 @@ final class Stream: NSObject {
     var suspended = false
     var onState: ((RTCPeerConnectionState) -> Void)?
     var onMenu: (() -> Void)?
+    /// How the worker makes this stream (`0x82`), the latest the worker sent; nil until it
+    /// sends one (an older server never does). Set on the main thread, for a stats overlay.
+    private(set) var pipeline: WireProtocol.Pipeline?
+    var onPipeline: ((WireProtocol.Pipeline) -> Void)?
     private var menuHeld = false
 
     init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer) {
@@ -80,7 +86,7 @@ final class Stream: NSObject {
             self.gathered = nil
         }
         let local = pc.localDescription?.sdp ?? offer.sdp
-        let answer = try await api.offer(sessionId: sessionId, sdp: local)
+        let answer = try await api.offer(sessionId: sessionId, sdp: local, client: clientName)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: answer)) { error in
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
@@ -173,5 +179,14 @@ extension Stream: RTCPeerConnectionDelegate {
 
 extension Stream: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
-    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {}
+    /// The worker sends acks (`0x81`, not used yet) and its pipeline (`0x82`); anything else, or
+    /// a message that does not decode, is ignored.
+    func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
+        guard buffer.isBinary, let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
+        DispatchQueue.main.async {
+            guard pipeline != self.pipeline else { return }
+            self.pipeline = pipeline
+            self.onPipeline?(pipeline)
+        }
+    }
 }
