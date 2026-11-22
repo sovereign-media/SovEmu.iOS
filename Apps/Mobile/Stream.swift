@@ -47,7 +47,25 @@ final class Stream: NSObject {
     /// The worker changed the stream's quality: the notice to show (`qualityNotice`). Called on
     /// the main thread.
     var onQuality: ((WireProtocol.QualityNotice) -> Void)?
+    /// The game's first picture reached the screen. Called once, on the main thread.
+    var onFirstFrame: (() -> Void)?
+    /// Each second's stats, as sent to the worker. Called on the main thread.
+    var onStats: ((WireProtocol.Stats) -> Void)?
     private var menuHeld = false
+
+    /// Button to frame, measured from the worker's acks and the frames shown after them.
+    let frameLatency = FrameLatency()
+    /// Watches the frames reaching the screen, beside the video view.
+    private let tap = FrameTap()
+    private let rttLock = NSLock()
+    /// The last input round trips, in ms (send, the worker applies it on a frame, its ack).
+    private var rtts: [Int64] = []
+    private static let rttWindow = 32
+
+    /// Frames shown so far (read once a second, to notice a picture that stops).
+    var frames: Int64 { tap.frames }
+    /// The recent input round trips, in ms.
+    var inputRtts: [Int64] { rttLock.withLock { rtts } }
 
     init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer) {
         self.api = api
@@ -55,6 +73,8 @@ final class Stream: NSObject {
         self.controller = controller
         self.videoView = videoView
         super.init()
+        tap.latency = frameLatency
+        tap.onFirst = { [weak self] in DispatchQueue.main.async { self?.onFirstFrame?() } }
         let config = RTCConfiguration()
         config.sdpSemantics = .unifiedPlan
         config.iceServers = iceServers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
@@ -114,7 +134,10 @@ final class Stream: NSObject {
                 let reading = Self.reading(report)
                 DispatchQueue.main.async {
                     guard !self.closed, self.channel.readyState == .open else { return }
-                    self.send(WireProtocol.encodeStats(self.sampler.sample(reading, client: self.clientName)))
+                    let stats = self.sampler.sample(reading, client: self.clientName, inputRtts: self.inputRtts,
+                                                    inputToFrameMs: self.frameLatency.medianMs())
+                    self.send(WireProtocol.encodeStats(stats))
+                    self.onStats?(stats)
                 }
             }
         }
@@ -193,7 +216,23 @@ final class Stream: NSObject {
         channel.sendData(RTCDataBuffer(data: data, isBinary: true))
     }
 
-    private func now32() -> UInt32 { UInt32(truncatingIfNeeded: Int64(ProcessInfo.processInfo.systemUptime * 1000)) }
+    private func now32() -> UInt32 { Self.now32() }
+
+    /// The app's 32-bit millisecond clock, the one `client_time_ms` carries.
+    static func now32() -> UInt32 { UInt32(truncatingIfNeeded: Int64(ProcessInfo.processInfo.systemUptime * 1000)) }
+
+    /// An ack for an input: its round trip, and the start of a button-to-frame measurement.
+    private func acked(_ ack: WireProtocol.Ack) {
+        let now = Int64(Self.now32())
+        let rtt = (now - Int64(ack.clientTimeMs)) & 0xffff_ffff
+        if rtt < FrameLatency.maxPlausibleMs {
+            rttLock.withLock {
+                rtts.append(rtt)
+                if rtts.count > Self.rttWindow { rtts.removeFirst(rtts.count - Self.rttWindow) }
+            }
+        }
+        frameLatency.ackArrived(clientTimeMs: Int64(ack.clientTimeMs), nowMs: now)
+    }
 
     func close() {
         closed = true
@@ -218,7 +257,10 @@ extension Stream: RTCPeerConnectionDelegate {
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {
         if let track = transceiver.receiver.track as? RTCVideoTrack {
-            DispatchQueue.main.async { track.add(self.videoView) }
+            DispatchQueue.main.async {
+                track.add(self.videoView)
+                track.add(self.tap)
+            }
         }
     }
 
@@ -234,10 +276,15 @@ extension Stream: RTCPeerConnectionDelegate {
 
 extension Stream: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
-    /// The worker sends acks (`0x81`, not used yet) and its pipeline (`0x82`); anything else, or
-    /// a message that does not decode, is ignored.
+    /// The worker sends acks (`0x81`) and its pipeline (`0x82`); anything else, or a message that
+    /// does not decode, is ignored.
     func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
-        guard buffer.isBinary, let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
+        guard buffer.isBinary else { return }
+        if let ack = WireProtocol.decodeAck(buffer.data) {
+            acked(ack)
+            return
+        }
+        guard let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
         DispatchQueue.main.async {
             guard pipeline != self.pipeline else { return }
             let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
@@ -245,5 +292,29 @@ extension Stream: RTCDataChannelDelegate {
             if let notice { self.onQuality?(notice) }
             self.onPipeline?(pipeline)
         }
+    }
+}
+
+/// A second renderer on the video track: it draws nothing, and counts the frames reaching the
+/// screen, says when the first one does, and ends a button-to-frame measurement with each.
+/// Frames arrive on WebRTC's render thread.
+private final class FrameTap: NSObject, RTCVideoRenderer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count: Int64 = 0
+    var latency: FrameLatency?
+    var onFirst: (() -> Void)?
+
+    var frames: Int64 { lock.withLock { count } }
+
+    func setSize(_ size: CGSize) {}
+
+    func renderFrame(_ frame: RTCVideoFrame?) {
+        guard let frame else { return }
+        let first = lock.withLock {
+            count += 1
+            return count == 1
+        }
+        latency?.frameDelivered(timestampNs: frame.timeStampNs, nowMs: Int64(Stream.now32()))
+        if first { onFirst?() }
     }
 }

@@ -11,6 +11,12 @@ struct MenuItem: Identifiable {
     var action: () -> Void
     /// Left (−1) and right (+1), for rows that hold a value.
     var adjust: ((Int) -> Void)?
+    /// A picture before the title: a save's screenshot (a `/media/…` path).
+    var image: String?
+    /// Whether it can be picked (a load picker's empty slot cannot); dimmed when not.
+    var enabled = true
+    /// A delete button beside the row (a cheat's).
+    var onDelete: (() -> Void)?
 }
 
 /// The in-game menu's pages and the controller-driven navigation through them: the D-pad (or
@@ -296,7 +302,7 @@ final class GameMenu {
         case .down: focus = min(rows.count - 1, focus + 1)
         case .left: rows[focus].adjust?(-1)
         case .right: rows[focus].adjust?(1)
-        case .confirm: rows[focus].action()
+        case .confirm: if rows[focus].enabled { rows[focus].action() }
         case .back: back(close)
         }
     }
@@ -380,7 +386,7 @@ struct GameMenuView: View {
                                 .id(item.id)
                                 .onTapGesture {
                                     focus = index
-                                    item.action()
+                                    if item.enabled { item.action() }
                                 }
                         }
                     }
@@ -409,13 +415,38 @@ struct GameMenuView: View {
     }
 
     private func row(_ item: MenuItem, focused: Bool) -> some View {
-        HStack {
+        HStack(spacing: 12) {
             if item.adjust != nil && focused { Image(systemName: "chevron.left").font(.caption) }
-            Text(item.title).font(.title3)
-            Spacer()
-            if let detail = item.detail { Text(detail).font(.body).foregroundStyle(.secondary) }
+            if let image = item.image {
+                ZStack {
+                    Color.black
+                    if !image.isEmpty { RemoteImage(path: image, contentMode: .fit, pixelated: true) }
+                }
+                .frame(width: 64, height: 48)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.white.opacity(0.1), lineWidth: 1))
+            }
+            if item.image != nil, let detail = item.detail {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.title).font(.title3)
+                    Text(detail).font(.callout).foregroundStyle(.secondary)
+                }
+                Spacer()
+            } else {
+                Text(item.title).font(.title3)
+                Spacer()
+                if let detail = item.detail { Text(detail).font(.body).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
+            }
             if item.adjust != nil && focused { Image(systemName: "chevron.right").font(.caption) }
+            if let onDelete = item.onDelete {
+                Button(action: onDelete) {
+                    Image(systemName: "trash").font(.callout).foregroundStyle(Sov.slate400).frame(width: 36, height: 36)
+                        .background(.white.opacity(0.06), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
         }
+        .opacity(item.enabled ? 1 : 0.4)
         .foregroundStyle(.white)
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
