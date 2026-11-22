@@ -132,14 +132,24 @@ public enum WireProtocol {
             public var width: Int
             public var height: Int
             public var fps: Double
+            /// The video bitrate as last told to the player, kbit/s: it moves in steps worth a
+            /// notice, so a change from the one before is shown (`qualityNotice`). 0: unknown
+            /// (an older server).
+            public var kbps: Int
+            /// What held it down when it last fell: `connection`, `client`, or empty.
+            public var limitedBy: String
 
             public init(codec: String = "", encoder: String = "", hardware: Bool = false, fallbacks: [Fallback] = [],
-                        width: Int = 0, height: Int = 0, fps: Double = 0) {
+                        width: Int = 0, height: Int = 0, fps: Double = 0, kbps: Int = 0, limitedBy: String = "") {
                 (self.codec, self.encoder, self.hardware, self.fallbacks) = (codec, encoder, hardware, fallbacks)
                 (self.width, self.height, self.fps) = (width, height, fps)
+                (self.kbps, self.limitedBy) = (kbps, limitedBy)
             }
 
-            enum CodingKeys: String, CodingKey { case codec, encoder, hardware, fallbacks, width, height, fps }
+            enum CodingKeys: String, CodingKey {
+                case codec, encoder, hardware, fallbacks, width, height, fps, kbps
+                case limitedBy = "limited_by"
+            }
 
             public init(from decoder: Decoder) throws {
                 let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -150,6 +160,8 @@ public enum WireProtocol {
                 width = try c.decodeIfPresent(Int.self, forKey: .width) ?? 0
                 height = try c.decodeIfPresent(Int.self, forKey: .height) ?? 0
                 fps = try c.decodeIfPresent(Double.self, forKey: .fps) ?? 0
+                kbps = try c.decodeIfPresent(Int.self, forKey: .kbps) ?? 0
+                limitedBy = try c.decodeIfPresent(String.self, forKey: .limitedBy) ?? ""
             }
         }
 

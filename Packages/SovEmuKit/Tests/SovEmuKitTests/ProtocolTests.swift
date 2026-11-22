@@ -16,6 +16,35 @@ struct ProtocolTests {
         #expect([UInt8](WireProtocol.encodeHotkeys(fastForward: false, rewind: true)) == [0x02, 1, 0b10])
     }
 
+    @Test func encodesStatsLikeTheRustReference() {
+        // `stats_are_json_after_the_header` in SovEmu.Protocol: only the known values, in order.
+        let stats = WireProtocol.Stats(jitterMs: 1.5, fps: .nan, packetsLost: 2, framesDropped: 3)
+        let expected = Data([0x04, 1]) + Data(#"{"jitter_ms":1.5,"packets_lost":2,"frames_dropped":3}"#.utf8)
+        #expect(WireProtocol.encodeStats(stats) == expected)
+        let named = WireProtocol.Stats(client: #"ios "pad""#, decodeMs: 4.04, fps: 60, kbps: 4999.96)
+        #expect(String(decoding: WireProtocol.encodeStats(named).dropFirst(2), as: UTF8.self)
+            == #"{"client":"ios \"pad\"","decode_ms":4,"fps":60,"kbps":5000}"#)
+    }
+
+    @Test func statsComeFromTheChangeBetweenReadings() {
+        var sampler = StatsSampler()
+        let first = sampler.sample(StatsReading(at: 10, bytesReceived: 1000, totalDecodeTime: 1, framesDecoded: 100,
+                                                framesPerSecond: 60, packetsLost: 1, framesDropped: 2))
+        // The first reading has nothing to compare with.
+        #expect(first == WireProtocol.Stats(fps: 60, packetsLost: 1, framesDropped: 2))
+        let second = sampler.sample(
+            StatsReading(at: 11, bytesReceived: 626_000, jitterBufferDelay: 0.6, jitterBufferEmittedCount: 60,
+                         totalDecodeTime: 1.24, framesDecoded: 160, framesPerSecond: 60, width: 640, height: 480,
+                         packetsLost: 1, framesDropped: 5, networkRttMs: 2.5, decoder: "VideoToolbox"),
+            client: "ios")
+        #expect(second.kbps == 5000)
+        #expect(abs((second.decodeMs ?? 0) - 4) < 0.001)
+        #expect(abs((second.jitterMs ?? 0) - 10) < 0.001)
+        #expect(second.framesDropped == 5)
+        #expect(second.client == "ios")
+        #expect(second.decoder == "VideoToolbox")
+    }
+
     @Test func encodesAnalogLikeTheRustReference() {
         // `analog_layout_is_stable_and_round_trips` in SovEmu.Protocol.
         let a = WireProtocol.Analog(lx: -32768, ly: 32767, rx: 1, ry: -2, l2: 0, r2: 0x1234)
@@ -40,7 +69,7 @@ struct ProtocolTests {
     }
 
     /// `PIPELINE_VECTOR` in SovEmu.Protocol, protocol.test.ts and SovEmu.Android's ProtocolTest.
-    static let pipelineVector = #"{"renderer":"llvmpipe","renderer_software":true,"video":{"codec":"h264","encoder":"x264","hardware":false,"fallbacks":[{"encoder":"vaapi","reason":"no device"}],"width":256,"height":224,"fps":60.0},"audio":{"codec":"opus","source_hz":32040.0,"kbps":128},"run_ahead":1}"#
+    static let pipelineVector = #"{"renderer":"llvmpipe","renderer_software":true,"video":{"codec":"h264","encoder":"x264","hardware":false,"fallbacks":[{"encoder":"vaapi","reason":"no device"}],"width":256,"height":224,"fps":60.0,"kbps":3500,"limited_by":"client"},"audio":{"codec":"opus","source_hz":32040.0,"kbps":128},"run_ahead":1}"#
 
     private func pipelineMessage(_ json: String, type: UInt8 = 0x82, version: UInt8 = 1) -> Data {
         Data([type, version]) + Data(json.utf8)
@@ -51,7 +80,8 @@ struct ProtocolTests {
         #expect(pipeline == WireProtocol.Pipeline(
             renderer: "llvmpipe", rendererSoftware: true,
             video: .init(codec: "h264", encoder: "x264", hardware: false,
-                         fallbacks: [.init(encoder: "vaapi", reason: "no device")], width: 256, height: 224, fps: 60),
+                         fallbacks: [.init(encoder: "vaapi", reason: "no device")], width: 256, height: 224, fps: 60,
+                         kbps: 3500, limitedBy: "client"),
             audio: .init(codec: "opus", sourceHz: 32040, kbps: 128),
             runAhead: 1))
     }
@@ -64,6 +94,27 @@ struct ProtocolTests {
         #expect(sparse.video.fallbacks.isEmpty)
         #expect(sparse.audio == WireProtocol.Pipeline.Audio())
         #expect(WireProtocol.decodePipeline(pipelineMessage("{}")) == WireProtocol.Pipeline())
+    }
+
+    @Test func aChangeInQualityIsSaidWithWhyItFell() {
+        func at(_ kbps: Int, _ limitedBy: String = "") -> WireProtocol.Pipeline {
+            WireProtocol.Pipeline(video: .init(codec: "vp8", kbps: kbps, limitedBy: limitedBy))
+        }
+        typealias Notice = WireProtocol.QualityNotice
+        #expect(WireProtocol.qualityNotice(before: at(5000), now: at(8400))
+            == Notice(line: "Connection improved. Playing at a higher quality.", icon: "wifi-up"))
+        #expect(WireProtocol.qualityNotice(before: at(5000), now: at(3300, "connection"))
+            == Notice(line: "Slow connection. Playing at a lower quality.", icon: "wifi-alert"))
+        #expect(WireProtocol.qualityNotice(before: at(5000), now: at(800, "client"))
+            == Notice(line: "This device is falling behind. Playing at a lower quality.", icon: "gauge"))
+        // Up again after the device fell behind: the connection did not improve.
+        #expect(WireProtocol.qualityNotice(before: at(800, "client"), now: at(5000))
+            == Notice(line: "Playing at a higher quality.", icon: "gauge"))
+        // The first message, an unchanged one, and a server that does not tell say nothing.
+        #expect(WireProtocol.qualityNotice(before: nil, now: at(5000)) == nil)
+        #expect(WireProtocol.qualityNotice(before: at(5000), now: at(5000)) == nil)
+        #expect(WireProtocol.qualityNotice(before: at(0), now: at(5000)) == nil)
+        #expect(WireProtocol.qualityNotice(before: at(5000), now: at(0)) == nil)
     }
 
     @Test func rejectsOtherPipelineMessages() {
