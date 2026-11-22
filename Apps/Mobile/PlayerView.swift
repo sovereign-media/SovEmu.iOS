@@ -30,6 +30,8 @@ struct PlayerView: View {
     /// The disc in the tray after a change (a multi-disc game); the session says until then.
     @State private var disc: Int?
     @State private var toast: String?
+    /// The stream's quality changed: the notice at the top of the screen, for a moment.
+    @State private var quality: WireProtocol.QualityNotice?
     @State private var controller = Controller()
     @State private var gameMenu: GameMenu?
     /// The system's buttons and pad, and the controllers' diagrams, for remapping.
@@ -67,6 +69,26 @@ struct PlayerView: View {
                 }
             }
             .padding()
+            // Sovereign's player message chip (a glyph before the line, gray-950 at 75% under a
+            // 2 pt white/40 edge, two lines at most), but at the very top edge of the screen
+            // rather than 12% down, so it stays out of the game.
+            if let quality {
+                VStack {
+                    HStack(spacing: 8) {
+                        if let symbol = Self.qualitySymbols[quality.icon] { Image(systemName: symbol) }
+                        Text(quality.line).lineLimit(2)
+                    }
+                    .font(.body).foregroundStyle(.white)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                    .frame(minHeight: 40)
+                    .background(Color(red: 3 / 255, green: 7 / 255, blue: 18 / 255).opacity(0.75), in: RoundedRectangle(cornerRadius: 20))
+                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.4), lineWidth: 2))
+                    .frame(maxWidth: 560)
+                    Spacer()
+                }
+                .padding(.top, 8).padding(.horizontal, 16)
+                .allowsHitTesting(false)
+            }
             if menuOpen { menu }
         }
         .statusBarHidden()
@@ -155,6 +177,19 @@ struct PlayerView: View {
         closeMenu()
     }
 
+    /// The system's nearest symbols to the notice's glyphs (Sovereign.Design's own `wifi-alert`
+    /// and `wifi-up` are not system symbols); a name not here draws none.
+    private static let qualitySymbols = ["wifi-alert": "wifi.exclamationmark", "wifi-up": "wifi", "gauge": "speedometer"]
+
+    /// Shown for Sovereign's 5 s.
+    private func showQuality(_ notice: WireProtocol.QualityNotice) {
+        quality = notice
+        Task {
+            try? await Task.sleep(for: .seconds(5))
+            if quality == notice { quality = nil }
+        }
+    }
+
     private func flash(_ text: String) {
         toast = text
         Task {
@@ -175,6 +210,7 @@ struct PlayerView: View {
             controller.mappings = (try? await Mappings.fetch(system: system.id, with: api)) ?? Mappings(system: system.id)
             controls = try? await api.controls(system: system.id)
             let s = Stream(api: api, sessionId: info.id, iceServers: config?.iceServers ?? [], controller: controller, videoView: video)
+            s.onQuality = { showQuality($0) }
             s.onState = { state in
                 if state == .failed { status = "Connection failed" }
                 if state == .connected { everConnected = true }

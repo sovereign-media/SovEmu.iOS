@@ -21,6 +21,10 @@ final class Stream: NSObject {
     private var channel: RTCDataChannel!
     private var gathered: CheckedContinuation<Void, Never>?
     private var timer: DispatchSourceTimer?
+    /// Samples the connection's stats for the worker, on the main thread.
+    private var statsTimer: Timer?
+    private var sampler = StatsSampler()
+    private var closed = false
     private var seq: UInt32 = 0
     private var sent: [UInt16] = []
     private var sentHotkeys: UInt8 = 0
@@ -40,6 +44,9 @@ final class Stream: NSObject {
     /// sends one (an older server never does). Set on the main thread, for a stats overlay.
     private(set) var pipeline: WireProtocol.Pipeline?
     var onPipeline: ((WireProtocol.Pipeline) -> Void)?
+    /// The worker changed the stream's quality: the notice to show (`qualityNotice`). Called on
+    /// the main thread.
+    var onQuality: ((WireProtocol.QualityNotice) -> Void)?
     private var menuHeld = false
 
     init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer) {
@@ -93,6 +100,52 @@ final class Stream: NSObject {
             }
         }
         startPump()
+        await MainActor.run { self.startStats() }
+    }
+
+    /// Sends this client's view of the stream to the worker once a second while it plays: the
+    /// worker lowers the video bitrate for a device that is not keeping up, which its estimate
+    /// of the connection cannot see.
+    private func startStats() {
+        guard !closed else { return }
+        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, !self.closed, self.channel.readyState == .open else { return }
+            self.pc.statistics { report in
+                let reading = Self.reading(report)
+                DispatchQueue.main.async {
+                    guard !self.closed, self.channel.readyState == .open else { return }
+                    self.send(WireProtocol.encodeStats(self.sampler.sample(reading, client: self.clientName)))
+                }
+            }
+        }
+    }
+
+    private static func reading(_ report: RTCStatisticsReport) -> StatsReading {
+        let all = report.statistics.values
+        func inbound(_ kind: String) -> [String: NSObject] {
+            all.first { $0.type == "inbound-rtp" && $0.values["kind"] as? String == kind }?.values ?? [:]
+        }
+        let video = inbound("video")
+        let audio = inbound("audio")
+        let pair = all.first {
+            $0.type == "candidate-pair" && ($0.values["nominated"] as? NSNumber)?.boolValue == true
+                && $0.values["state"] as? String == "succeeded"
+        }?.values ?? [:]
+        func num(_ values: [String: NSObject], _ key: String) -> Double? { (values[key] as? NSNumber)?.doubleValue }
+        return StatsReading(
+            at: report.timestamp_us / 1_000_000,
+            bytesReceived: num(video, "bytesReceived") ?? 0,
+            jitterBufferDelay: num(video, "jitterBufferDelay") ?? 0,
+            jitterBufferEmittedCount: num(video, "jitterBufferEmittedCount") ?? 0,
+            totalDecodeTime: num(video, "totalDecodeTime") ?? 0,
+            framesDecoded: num(video, "framesDecoded") ?? 0,
+            framesPerSecond: num(video, "framesPerSecond"),
+            width: num(video, "frameWidth").map { Int($0) },
+            height: num(video, "frameHeight").map { Int($0) },
+            packetsLost: Int((num(video, "packetsLost") ?? 0) + (num(audio, "packetsLost") ?? 0)),
+            framesDropped: num(video, "framesDropped").map { Int($0) },
+            networkRttMs: num(pair, "currentRoundTripTime").map { $0 * 1000 },
+            decoder: video["decoderImplementation"] as? String)
     }
 
     /// Sends the controller state every 4 ms when it changes and at least every 100 ms.
@@ -143,6 +196,8 @@ final class Stream: NSObject {
     private func now32() -> UInt32 { UInt32(truncatingIfNeeded: Int64(ProcessInfo.processInfo.systemUptime * 1000)) }
 
     func close() {
+        closed = true
+        statsTimer?.invalidate()
         timer?.cancel()
         channel?.close()
         pc?.close()
@@ -185,7 +240,9 @@ extension Stream: RTCDataChannelDelegate {
         guard buffer.isBinary, let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
         DispatchQueue.main.async {
             guard pipeline != self.pipeline else { return }
+            let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
             self.pipeline = pipeline
+            if let notice { self.onQuality?(notice) }
             self.onPipeline?(pipeline)
         }
     }
