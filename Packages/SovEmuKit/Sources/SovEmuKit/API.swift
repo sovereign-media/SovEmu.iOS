@@ -419,6 +419,7 @@ enum Documents {
         sessionOffer(id: $id, sdp: $sdp, client: $client) }
         """
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
+    static let nameDevice = "mutation NameDevice($name: String!) { nameDevice(name: $name) }"
     static let reportClientEvents = """
         mutation ReportClientEvents($client: String!, $events: [ClientEventInput!]!) { \
         reportClientEvents(client: $client, events: $events) }
@@ -621,6 +622,11 @@ public final class SovEmuAPI: Sendable {
 
     static func offerVariables(sessionId: String, sdp: String, client: String?) -> [String: GraphQLValue] {
         ["id": .string(sessionId), "sdp": .string(sdp), "client": client.map(GraphQLValue.string) ?? .null]
+    }
+    /// Names this sign-in's device on the server ("SovEmu for iOS 0.1.0 · iPad"), for the
+    /// admin's Devices page.
+    public func nameDevice(_ name: String) async throws {
+        _ = try await post(Documents.nameDevice, ["name": .string(name)], field: "nameDevice", as: Bool.self)
     }
     public func stopSession(_ id: String) async throws {
         _ = try await post(Documents.stopSession, ["id": .string(id)], field: "stopSession", as: Bool.self)

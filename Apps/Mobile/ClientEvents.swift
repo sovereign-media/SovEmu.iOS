@@ -31,8 +31,14 @@ enum ClientEvents {
 
     /// `ios 0.1.0 (iPad, iPadOS 18.1)`.
     static var clientName: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
         let device = UIDevice.current
         return "ios \(version) (\(device.model), \(device.systemName) \(device.systemVersion))"
+    }
+
+    /// `SovEmu for iOS 0.1.0 · iPad`: this sign-in, on the admin's Devices page.
+    static var deviceName: String { "SovEmu for iOS \(version) · \(UIDevice.current.model)" }
+
+    private static var version: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     }
 }

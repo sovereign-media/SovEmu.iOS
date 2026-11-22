@@ -49,6 +49,7 @@ struct APITests {
         #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp, client: $client)"))
         #expect(Documents.sessionOffer.contains("$client: String)"))
         #expect(Documents.loadState.contains("loadState(sessionId: $sessionId, slot: $slot)"))
+        #expect(Documents.nameDevice == "mutation NameDevice($name: String!) { nameDevice(name: $name) }")
         for document in [Documents.viewer, Documents.systems, Documents.games, Documents.startSession] {
             #expect(!document.contains("_"), "camelCase, not snake_case: \(document)")
         }
