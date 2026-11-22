@@ -39,6 +39,46 @@ struct ProtocolTests {
         #expect(WireProtocol.decodeAck(Data([0x81, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])) == nil)
     }
 
+    /// `PIPELINE_VECTOR` in SovEmu.Protocol, protocol.test.ts and SovEmu.Android's ProtocolTest.
+    static let pipelineVector = #"{"renderer":"llvmpipe","renderer_software":true,"video":{"codec":"h264","encoder":"x264","hardware":false,"fallbacks":[{"encoder":"vaapi","reason":"no device"}],"width":256,"height":224,"fps":60.0},"audio":{"codec":"opus","source_hz":32040.0,"kbps":128},"run_ahead":1}"#
+
+    private func pipelineMessage(_ json: String, type: UInt8 = 0x82, version: UInt8 = 1) -> Data {
+        Data([type, version]) + Data(json.utf8)
+    }
+
+    @Test func decodesTheRustReferencePipeline() {
+        let pipeline = WireProtocol.decodePipeline(pipelineMessage(Self.pipelineVector))
+        #expect(pipeline == WireProtocol.Pipeline(
+            renderer: "llvmpipe", rendererSoftware: true,
+            video: .init(codec: "h264", encoder: "x264", hardware: false,
+                         fallbacks: [.init(encoder: "vaapi", reason: "no device")], width: 256, height: 224, fps: 60),
+            audio: .init(codec: "opus", sourceHz: 32040, kbps: 128),
+            runAhead: 1))
+    }
+
+    @Test func aPipelineToleratesMissingAndUnknownKeys() throws {
+        let sparse = try #require(WireProtocol.decodePipeline(
+            pipelineMessage(#"{"video":{"codec":"vp8","newer":1},"later":true}"#)))
+        #expect(sparse.video.codec == "vp8")
+        #expect(sparse.renderer == nil)
+        #expect(sparse.video.fallbacks.isEmpty)
+        #expect(sparse.audio == WireProtocol.Pipeline.Audio())
+        #expect(WireProtocol.decodePipeline(pipelineMessage("{}")) == WireProtocol.Pipeline())
+    }
+
+    @Test func rejectsOtherPipelineMessages() {
+        #expect(WireProtocol.decodePipeline(pipelineMessage(#""fast""#)) == nil)
+        #expect(WireProtocol.decodePipeline(pipelineMessage("[]")) == nil)
+        #expect(WireProtocol.decodePipeline(pipelineMessage("{}", type: 0x04)) == nil)
+        #expect(WireProtocol.decodePipeline(pipelineMessage("{}", version: 2)) == nil)
+        #expect(WireProtocol.decodePipeline(Data([0x82])) == nil)
+        #expect(WireProtocol.decodePipeline(Data([0x81, 1, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0])) == nil)
+        let long = #"{"renderer":""# + String(repeating: "x", count: 4096) + #""}"#
+        #expect(WireProtocol.decodePipeline(pipelineMessage(long)) == nil)
+        // An ack is not a pipeline, nor a pipeline an ack.
+        #expect(WireProtocol.decodeAck(pipelineMessage(Self.pipelineVector)) == nil)
+    }
+
     @Test func capsPortsAndNumbersButtonsLikeLibretro() {
         #expect(WireProtocol.encodeInput(seq: 1, clientTimeMs: 0, ports: [1, 2, 3, 4, 5]).count == 19)
         #expect(RetroButton.b.bit == 1)

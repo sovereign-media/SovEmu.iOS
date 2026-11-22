@@ -414,7 +414,10 @@ enum Documents {
     static let startSession = """
         mutation StartSession($gameId: Int!) { startSession(gameId: $gameId) { \(SessionInfo.fields) } }
         """
-    static let sessionOffer = "mutation SessionOffer($id: ID!, $sdp: String!) { sessionOffer(id: $id, sdp: $sdp) }"
+    static let sessionOffer = """
+        mutation SessionOffer($id: ID!, $sdp: String!, $client: String) { \
+        sessionOffer(id: $id, sdp: $sdp, client: $client) }
+        """
     static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
     static let reportClientEvents = """
         mutation ReportClientEvents($client: String!, $events: [ClientEventInput!]!) { \
@@ -609,9 +612,15 @@ public final class SovEmuAPI: Sendable {
     public func startSession(gameId: Int64) async throws -> SessionInfo {
         try await post(Documents.startSession, ["gameId": .int(Int(gameId))], field: "startSession")
     }
-    /// Sends the complete WebRTC offer SDP; returns the worker's answer SDP.
-    public func offer(sessionId: String, sdp: String) async throws -> String {
-        try await post(Documents.sessionOffer, ["id": .string(sessionId), "sdp": .string(sdp)], field: "sessionOffer")
+    /// Sends the complete WebRTC offer SDP, naming the client (`ios 0.1.0 (iPad, iPadOS 18.1)`,
+    /// shown on the admin's sessions page); returns the worker's answer SDP.
+    public func offer(sessionId: String, sdp: String, client: String? = nil) async throws -> String {
+        try await post(Documents.sessionOffer, Self.offerVariables(sessionId: sessionId, sdp: sdp, client: client),
+                       field: "sessionOffer")
+    }
+
+    static func offerVariables(sessionId: String, sdp: String, client: String?) -> [String: GraphQLValue] {
+        ["id": .string(sessionId), "sdp": .string(sdp), "client": client.map(GraphQLValue.string) ?? .null]
     }
     public func stopSession(_ id: String) async throws {
         _ = try await post(Documents.stopSession, ["id": .string(id)], field: "stopSession", as: Bool.self)

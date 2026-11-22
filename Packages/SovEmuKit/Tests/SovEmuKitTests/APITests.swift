@@ -46,11 +46,18 @@ struct APITests {
         #expect(Documents.viewer.contains("viewer { setupRequired user { id username isAdmin role } }"))
         #expect(Documents.games.contains("system(id: $system) { games {"))
         #expect(Documents.startSession.contains("startSession(gameId: $gameId)"))
-        #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp)"))
+        #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp, client: $client)"))
+        #expect(Documents.sessionOffer.contains("$client: String)"))
         #expect(Documents.loadState.contains("loadState(sessionId: $sessionId, slot: $slot)"))
         for document in [Documents.viewer, Documents.systems, Documents.games, Documents.startSession] {
             #expect(!document.contains("_"), "camelCase, not snake_case: \(document)")
         }
+    }
+
+    @Test func theOfferNamesTheClient() throws {
+        let variables = SovEmuAPI.offerVariables(sessionId: "s1", sdp: "v=0", client: "ios 0.1.0 (iPhone, iOS 26.0)")
+        #expect(variables == ["id": .string("s1"), "sdp": .string("v=0"), "client": .string("ios 0.1.0 (iPhone, iOS 26.0)")])
+        #expect(SovEmuAPI.offerVariables(sessionId: "s1", sdp: "v=0", client: nil)["client"] == .null)
     }
 
     @Test func decodesViewerAndSystems() throws {
