@@ -3,13 +3,24 @@ import SovEmuKit
 
 @main
 struct SovEmuApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
+    @State private var library: Library
+    @State private var settings = AppSettings()
+
+    init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        _library = State(initialValue: Library(api: { [weak model] in model?.api }, signedOut: { [weak model] in model?.signedIn = false }))
+    }
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environment(library)
+                .environment(settings)
                 .preferredColorScheme(.dark)
+                .tint(Sov.accent)
         }
     }
 }
@@ -101,36 +112,68 @@ final class AppModel {
     }
 }
 
+/// A place inside a tab.
 enum Route: Hashable {
-    case games(SystemSummary)
-    case play(SystemSummary, Game)
+    /// A system's games, with a game's panel open (`open`) when it came from Home or Search.
+    case system(SystemSummary, open: Int64?)
+}
+
+/// A game to play, and how to start it.
+struct PlayRequest: Identifiable {
+    let id = UUID()
+    let system: SystemSummary
+    let game: Game
+    let start: Start
+}
+
+/// Starts a game from anywhere: `play(system, game, start)`.
+struct PlayAction {
+    var action: (SystemSummary, Game, Start) -> Void = { _, _, _ in }
+
+    func callAsFunction(_ system: SystemSummary, _ game: Game, _ start: Start) { action(system, game, start) }
+}
+
+extension EnvironmentValues {
+    @Entry var playGame = PlayAction()
 }
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @State private var path: [Route] = []
+    @Environment(Library.self) private var library
+    @Environment(AppSettings.self) private var settings
+    @Environment(\.scenePhase) private var phase
     @State private var checked = false
+    @State private var playing: PlayRequest?
+    @State private var idle = IdleWatcher()
+    @State private var screensaver = false
+    @State private var music = MenuMusic()
 
     var body: some View {
-        Group {
+        ZStack {
             if !checked {
                 ProgressView()
             } else if !model.signedIn {
                 ConnectView()
             } else {
-                NavigationStack(path: $path) {
-                    SystemsView(path: $path)
-                        .navigationDestination(for: Route.self) { route in
-                            switch route {
-                            case .games(let system):
-                                GamesView(system: system, path: $path)
-                            case .play(let system, let game):
-                                PlayerView(system: system, game: game) { path.removeLast() }
-                                    .toolbar(.hidden, for: .navigationBar)
-                            }
-                        }
-                }
+                MainView()
+                    .environment(\.playGame, PlayAction { system, game, start in playing = PlayRequest(system: system, game: game, start: start) })
             }
+            // A CRT look over the menus; never over a game, whose stream is the console's own picture.
+            if settings.scanlines && playing == nil { Scanlines() }
+            if screensaver && model.signedIn && playing == nil {
+                ScreensaverView {
+                    screensaver = false
+                    idle.touched()
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.4), value: screensaver)
+        .fullScreenCover(item: $playing) { request in
+            PlayerView(system: request.system, game: request.game, start: request.start) {
+                playing = nil
+            }
+            .onDisappear { library.played(request.system.id) }
         }
         .task {
             // Ask how to sign in first, each launch the server answers; offline, the stored
@@ -147,6 +190,87 @@ struct RootView: View {
                 } catch {}
             }
             checked = true
+            if model.signedIn {
+                library.refresh()
+                await model.nameDevice()
+            }
+            idle.install()
+        }
+        .onChange(of: model.signedIn) { _, signedIn in
+            library.clear()
+            if signedIn {
+                library.refresh()
+                Task { await model.nameDevice() }
+            }
+        }
+        // The screensaver, after the chosen minutes without input in the menus.
+        .task(id: settings.screensaverMinutes) {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                let minutes = settings.screensaverMinutes
+                if minutes > 0, model.signedIn, playing == nil, !screensaver,
+                   Date().timeIntervalSince(idle.lastInput) >= Double(minutes * 60) {
+                    screensaver = true
+                }
+            }
+        }
+        .onAppear(perform: update)
+        .onChange(of: playing == nil) { update() }
+        .onChange(of: screensaver) { update() }
+        .onChange(of: phase) { update() }
+        .onChange(of: settings.music) { update() }
+        .onChange(of: settings.screensaverMinutes) { update() }
+    }
+
+    /// Music in the menus (a game, and the screensaver's videos, have their own sound), and the
+    /// screen kept awake while a game plays, or in the menus while a screensaver will come.
+    private func update() {
+        let menus = playing == nil
+        music.play(settings.music && menus && !screensaver && phase == .active)
+        UIApplication.shared.isIdleTimerDisabled = !menus || (settings.screensaverMinutes > 0 && model.signedIn)
+        if menus { idle.touched() }
+    }
+}
+
+enum AppTab: Hashable {
+    case home, search, systems, account
+}
+
+/// The signed-in app: Home, Search, Systems and the account, as the other clients' navigation
+/// (tabs on an iPhone, a sidebar on an iPad), each tab keeping its own way back.
+struct MainView: View {
+    @Environment(Library.self) private var library
+    @State private var tab = AppTab.home
+    @State private var home: [Route] = []
+    @State private var search: [Route] = []
+    @State private var systems: [Route] = []
+
+    var body: some View {
+        TabView(selection: $tab) {
+            Tab("Home", systemImage: "house", value: AppTab.home) {
+                NavigationStack(path: $home) { HomeView(path: $home).routes() }
+            }
+            Tab("Search", systemImage: "magnifyingglass", value: AppTab.search, role: .search) {
+                NavigationStack(path: $search) { SearchView().routes() }
+            }
+            Tab("Systems", systemImage: "gamecontroller", value: AppTab.systems) {
+                NavigationStack(path: $systems) { SystemsList().routes() }
+            }
+            Tab(library.user?.username ?? "Account", systemImage: "person.crop.circle", value: AppTab.account) {
+                NavigationStack { AccountView() }
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+    }
+}
+
+extension View {
+    /// Where a tab's links go.
+    func routes() -> some View {
+        navigationDestination(for: Route.self) { route in
+            switch route {
+            case .system(let system, let open): SystemView(system: system, openFirst: open)
+            }
         }
     }
 }

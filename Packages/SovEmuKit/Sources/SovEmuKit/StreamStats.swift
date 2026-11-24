@@ -11,6 +11,13 @@ extension WireProtocol {
     public struct Stats: Equatable, Sendable {
         /// The client and its version (`ios 1.0 (iPhone, iOS 18.1)`).
         public var client: String?
+        /// Button to pixel, estimated from the parts below.
+        public var estimateMs: Double?
+        /// Button to frame, measured (`FrameLatency`).
+        public var inputToFrameMs: Int64?
+        /// The input round trip (send, the worker applies it on a frame, its ack), median and p95.
+        public var inputRttP50Ms: Int64?
+        public var inputRttP95Ms: Int64?
         public var netRttMs: Double?
         public var jitterMs: Double?
         public var decodeMs: Double?
@@ -26,10 +33,14 @@ extension WireProtocol {
         /// The video decoder (`decoderImplementation`).
         public var decoder: String?
 
-        public init(client: String? = nil, netRttMs: Double? = nil, jitterMs: Double? = nil, decodeMs: Double? = nil,
+        public init(client: String? = nil, estimateMs: Double? = nil, inputToFrameMs: Int64? = nil,
+                    inputRttP50Ms: Int64? = nil, inputRttP95Ms: Int64? = nil, netRttMs: Double? = nil,
+                    jitterMs: Double? = nil, decodeMs: Double? = nil,
                     width: Int? = nil, height: Int? = nil, fps: Double? = nil, kbps: Double? = nil,
                     packetsLost: Int? = nil, framesDropped: Int? = nil, decoder: String? = nil) {
-            (self.client, self.netRttMs, self.jitterMs, self.decodeMs) = (client, netRttMs, jitterMs, decodeMs)
+            (self.client, self.estimateMs, self.inputToFrameMs) = (client, estimateMs, inputToFrameMs)
+            (self.inputRttP50Ms, self.inputRttP95Ms) = (inputRttP50Ms, inputRttP95Ms)
+            (self.netRttMs, self.jitterMs, self.decodeMs) = (netRttMs, jitterMs, decodeMs)
             (self.width, self.height, self.fps, self.kbps) = (width, height, fps, kbps)
             (self.packetsLost, self.framesDropped, self.decoder) = (packetsLost, framesDropped, decoder)
         }
@@ -44,12 +55,17 @@ extension WireProtocol {
             return rounded == rounded.rounded() ? String(Int64(rounded)) : String(rounded)
         }
         func integer(_ x: Int?) -> String? { x.map(String.init) }
+        func long(_ x: Int64?) -> String? { x.map(String.init) }
         func string(_ x: String?) -> String? {
             guard let x, let json = try? JSONEncoder().encode(x) else { return nil }
             return String(decoding: json, as: UTF8.self)
         }
         let fields: [(String, String?)] = [
             ("client", string(stats.client)),
+            ("estimate_ms", number(stats.estimateMs)),
+            ("input_to_frame_ms", long(stats.inputToFrameMs)),
+            ("input_rtt_p50_ms", long(stats.inputRttP50Ms)),
+            ("input_rtt_p95_ms", long(stats.inputRttP95Ms)),
             ("net_rtt_ms", number(stats.netRttMs)),
             ("jitter_ms", number(stats.jitterMs)),
             ("decode_ms", number(stats.decodeMs)),
@@ -140,7 +156,10 @@ public struct StatsSampler: Sendable {
 
     public init() {}
 
-    public mutating func sample(_ now: StatsReading, client: String? = nil) -> WireProtocol.Stats {
+    /// `inputRtts`: the recent input round trips in ms, in any order; `inputToFrameMs`: the
+    /// measured button→frame (`FrameLatency.medianMs`).
+    public mutating func sample(_ now: StatsReading, client: String? = nil, inputRtts: [Int64] = [],
+                                inputToFrameMs: Int64? = nil) -> WireProtocol.Stats {
         let prev = last
         last = now
         func perFrame(_ total: KeyPath<StatsReading, Double>, _ count: KeyPath<StatsReading, Double>) -> Double? {
@@ -149,11 +168,23 @@ public struct StatsSampler: Sendable {
             return n > 0 ? (now[keyPath: total] - prev[keyPath: total]) / n * 1000 : nil
         }
         let seconds = prev.map { now.at - $0.at }.flatMap { $0 > 0 ? $0 : nil }
+        let sorted = inputRtts.sorted()
+        let p50 = percentile(sorted, 50)
+        let jitter = perFrame(\.jitterBufferDelay, \.jitterBufferEmittedCount)
+        let decode = perFrame(\.totalDecodeTime, \.framesDecoded)
+        // Button to pixel, roughly, as the other clients estimate it: the input round trip (the
+        // input reaches the core and the frame comes back), plus half a frame of alignment, ~2 ms
+        // encode, the jitter buffer, decode and half a display refresh at 60 Hz.
+        let estimate = p50.map { Double($0) + 8 + 2 + (jitter ?? 0) + (decode ?? 0) + 8 }
         return WireProtocol.Stats(
             client: client,
+            estimateMs: estimate,
+            inputToFrameMs: inputToFrameMs,
+            inputRttP50Ms: p50,
+            inputRttP95Ms: percentile(sorted, 95),
             netRttMs: now.networkRttMs,
-            jitterMs: perFrame(\.jitterBufferDelay, \.jitterBufferEmittedCount),
-            decodeMs: perFrame(\.totalDecodeTime, \.framesDecoded),
+            jitterMs: jitter,
+            decodeMs: decode,
             width: now.width,
             height: now.height,
             fps: now.framesPerSecond,
@@ -161,5 +192,65 @@ public struct StatsSampler: Sendable {
             packetsLost: now.packetsLost,
             framesDropped: now.framesDropped,
             decoder: now.decoder)
+    }
+}
+
+extension WireProtocol.Stats {
+    /// The stats overlay's rows, label and value, in the order the other clients show them.
+    public func rows() -> [(label: String, value: String)] {
+        func ms(_ x: Double?, _ digits: Int) -> String {
+            guard let x, x.isFinite else { return "–" }
+            return String(format: "%.\(digits)f ms", locale: Locale(identifier: "en_US_POSIX"), x)
+        }
+        let rtt = inputRttP50Ms.map { "\($0) ms · p95 \(inputRttP95Ms.map(String.init) ?? "–")" } ?? "–"
+        let video = "\(width.map(String.init) ?? "?")×\(height.map(String.init) ?? "?") @ \(fps.map { String(Int($0.rounded())) } ?? "–") fps"
+        return [
+            ("Estimated button→pixel", ms(estimateMs, 0)),
+            ("Measured button→frame", ms(inputToFrameMs.map(Double.init), 0)),
+            ("Input round trip", rtt),
+            ("Network RTT", ms(netRttMs, 1)),
+            ("Jitter buffer", ms(jitterMs, 1)),
+            ("Decode", ms(decodeMs, 1)),
+            ("Video", video),
+            ("Bitrate", kbps.map { "\(Int($0.rounded())) kbps" } ?? "–"),
+            ("Packets lost", String(packetsLost ?? 0)),
+        ]
+    }
+}
+
+extension WireProtocol {
+    /// The overlay's rows on how the stream is made, after the stats': the worker's `pipeline`
+    /// (none from a server that predates it, so no rows) and this app's `decoder`. The labels
+    /// and formats are the other clients'.
+    public static func pipelineRows(_ pipeline: Pipeline?, decoder: String?) -> [(label: String, value: String)] {
+        guard let pipeline else { return [] }
+        let video = pipeline.video
+        var rows: [(label: String, value: String)] = [
+            ("Stream", "\(codecName(video.codec)) · \(encoderName(video.encoder)) (\(video.hardware ? "GPU" : "CPU"))"),
+        ]
+        if !video.fallbacks.isEmpty {
+            rows.append(("Fell back from", video.fallbacks.map { "\(encoderName($0.encoder)): \($0.reason)" }.joined(separator: "; ")))
+        }
+        let rendering = pipeline.renderer.map { pipeline.rendererSoftware ? "Software · \($0)" : "GPU · \($0)" } ?? "CPU"
+        rows.append(("Rendering", rendering))
+        // Grouped as the other clients write it ("32,040"), whatever the device's language.
+        let grouping = NumberFormatter()
+        grouping.locale = Locale(identifier: "en_US")
+        grouping.numberStyle = .decimal
+        let hz = grouping.string(from: NSNumber(value: Int(pipeline.audio.sourceHz.rounded()))) ?? "\(Int(pipeline.audio.sourceHz))"
+        rows.append(("Audio", "\(codecName(pipeline.audio.codec)) \(pipeline.audio.kbps) kbps · from \(hz) Hz"))
+        rows.append(("Run-ahead", pipeline.runAhead == 0 ? "Off" : pipeline.runAhead == 1 ? "1 frame" : "\(pipeline.runAhead) frames"))
+        if let decoder { rows.append(("Decoder", decoder)) }
+        return rows
+    }
+
+    /// A codec's display name; one this app does not know shows as the worker names it.
+    static func codecName(_ codec: String) -> String {
+        ["h264": "H.264", "vp8": "VP8", "opus": "Opus"][codec] ?? codec
+    }
+
+    /// An encoder's display name; one this app does not know shows as the worker names it.
+    static func encoderName(_ encoder: String) -> String {
+        ["vaapi": "VA-API", "nvenc": "NVENC"][encoder] ?? encoder
     }
 }

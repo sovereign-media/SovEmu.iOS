@@ -45,7 +45,7 @@ struct APITests {
     @Test func documentsUseTheSchemasNames() {
         #expect(Documents.viewer.contains("viewer { setupRequired user { id username isAdmin role } }"))
         #expect(Documents.games.contains("system(id: $system) { games {"))
-        #expect(Documents.startSession.contains("startSession(gameId: $gameId)"))
+        #expect(Documents.startSession.contains("startSession(gameId: $gameId, startId: $startId)"))
         #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp, client: $client)"))
         #expect(Documents.sessionOffer.contains("$client: String)"))
         #expect(Documents.loadState.contains("loadState(sessionId: $sessionId, slot: $slot)"))
