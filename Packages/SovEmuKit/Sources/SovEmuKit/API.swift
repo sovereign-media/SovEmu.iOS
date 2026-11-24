@@ -299,14 +299,37 @@ public struct SystemButton: Codable, Sendable, Equatable {
     public var retroButton: RetroButton? { RetroButton(name: button) }
 }
 
-/// A system's buttons, in the order to list them, and its pad's diagram.
+/// One of a system's analog controls: the player's stick that drives it, what the console calls
+/// it, and the key on the system's diagram it lights. Sticks are not remapped (docs/CONTROLLERS.md).
+public struct SystemStick: Codable, Sendable, Equatable {
+    /// A `Stick`: `LEFT` or `RIGHT`.
+    public let stick: String
+    public let label: String
+    public let key: String
+
+    public init(stick: String, label: String, key: String) {
+        self.stick = stick
+        self.label = label
+        self.key = key
+    }
+
+    public var isRight: Bool { stick == "RIGHT" }
+    /// The player's stick that drives it, as a row shows it.
+    public var stickName: String { isRight ? "Right stick" : "Left stick" }
+    /// The stick on a controller's diagram.
+    public var controllerKey: String { isRight ? "r3" : "l3" }
+}
+
+/// A system's buttons, in the order to list them, its analog controls, and its pad's diagram.
 public struct SystemControls: Codable, Sendable, Equatable {
     public let buttons: [SystemButton]
+    public let sticks: [SystemStick]
     public let layout: PadLayout
 
-    public init(buttons: [SystemButton], layout: PadLayout) {
+    public init(buttons: [SystemButton], layout: PadLayout, sticks: [SystemStick] = []) {
         self.buttons = buttons
         self.layout = layout
+        self.sticks = sticks
     }
 }
 
@@ -440,7 +463,7 @@ enum Documents {
         """
     static let controls = """
         query Controls($system: ID!) { system(id: $system) { controls { buttons { button label } \
-        layout { \(PadLayout.fields) } } } controllerLayouts { \(PadLayout.fields) } }
+        sticks { stick label key } layout { \(PadLayout.fields) } } } controllerLayouts { \(PadLayout.fields) } }
         """
 }
 
