@@ -223,7 +223,7 @@ struct MainView: View {
     var body: some View {
         TabView(selection: $tab) {
             Tab("Home", systemImage: "house", value: AppTab.home) {
-                NavigationStack(path: $home) { HomeView().routes() }
+                NavigationStack(path: $home) { HomeView(path: $home).routes() }
             }
             Tab("Search", systemImage: "magnifyingglass", value: AppTab.search, role: .search) {
                 NavigationStack(path: $search) { SearchView().routes() }

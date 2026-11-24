@@ -2,10 +2,13 @@ import SovEmuKit
 import SwiftUI
 
 /// Home, as the other clients': a hero of featured games over rows of games to continue,
-/// favourites, systems, recently added games and each collection. A game card opens its panel
-/// on its system's page (Continue or Start over from there); the hero's Play starts at once.
+/// favourites, systems, recently added games and each collection. A "Continue playing" card
+/// opens a panel here (where the player left off, Continue, Game details); any other game card
+/// opens the game's panel on its system's page; the hero's Play starts at once.
 struct HomeView: View {
     @Environment(Library.self) private var library
+    /// The Home tab's way back, for Game details to go on from the Continue panel.
+    @Binding var path: [Route]
 
     var body: some View {
         Group {
@@ -13,7 +16,7 @@ struct HomeView: View {
             case .loading: ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let message):
                 Text(message).foregroundStyle(Sov.red300).padding().frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .ready(let feed): HomeContent(feed: feed)
+            case .ready(let feed): HomeContent(feed: feed, path: $path)
             }
         }
         .background(Sov.surface)
@@ -24,7 +27,13 @@ struct HomeView: View {
 
 private struct HomeContent: View {
     @Environment(Library.self) private var library
+    @Environment(\.playGame) private var play
     let feed: HomeFeed
+    @Binding var path: [Route]
+    /// The "Continue playing" game whose panel is open.
+    @State private var resumeId: Int64?
+    /// The panel Game details closed, to open again on coming back to Home.
+    @State private var reopen: Int64?
 
     var body: some View {
         let systems = library.systemList.filter { $0.gameCount > 0 }
@@ -33,7 +42,7 @@ private struct HomeContent: View {
                 Hero(games: feed.featured, empty: systems.isEmpty)
                 if !feed.recent.isEmpty {
                     HomeRow(title: "Continue playing", symbol: "clock.arrow.circlepath") {
-                        ForEach(feed.recent) { GameCard(game: $0, wide: true) }
+                        ForEach(feed.recent) { g in GameCard(game: g, wide: true) { resumeId = g.id } }
                     }
                 }
                 if !feed.favourites.isEmpty {
@@ -52,6 +61,31 @@ private struct HomeContent: View {
             .padding(.bottom, 48)
         }
         .ignoresSafeArea(edges: .top)
+        .onAppear {
+            guard let id = reopen else { return }
+            reopen = nil
+            resumeId = id
+        }
+        .inspector(isPresented: Binding(get: { resumeId != nil }, set: { if !$0 { resumeId = nil } })) {
+            if let game = feed.recent.first(where: { $0.id == resumeId }) {
+                let system = library.system(game.system)
+                ContinuePanel(
+                    game: game, system: system,
+                    onPlay: { start in if let system { play(system, game, start) } },
+                    onDetails: {
+                        // A sheet would stay over the pushed page: close it, and open it again
+                        // when Back comes here.
+                        guard let system else { return }
+                        reopen = game.id
+                        resumeId = nil
+                        path.append(.system(system, open: game.id))
+                    },
+                    onClose: { resumeId = nil })
+                    .inspectorColumnWidth(min: 360, ideal: 420, max: 480)
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(Sov.surface)
+            }
+        }
     }
 }
 
@@ -188,40 +222,48 @@ struct GameCard: View {
     @Environment(Library.self) private var library
     let game: Game
     let wide: Bool
+    /// What a tap does instead of opening the game's panel on its system's page (the Continue
+    /// row's cards open Home's own panel).
+    var onOpen: (() -> Void)?
     @State private var covered = false
 
     var body: some View {
         let system = library.system(game.system)
+        if let onOpen {
+            Button(action: onOpen) { card(system) }.buttonStyle(.plain)
+        } else {
+            NavigationLink(value: system.map { Route.system($0, open: game.id) }) { card(system) }.buttonStyle(.plain)
+        }
+    }
+
+    private func card(_ system: SystemSummary?) -> some View {
         let short = system?.short ?? game.system.uppercased()
-        NavigationLink(value: system.map { Route.system($0, open: game.id) }) {
-            VStack(alignment: .leading, spacing: 8) {
-                ZStack {
-                    // Only the Continue row shows where the player left off; the others show box art.
-                    if wide, let shot = game.autoSave?.screenshotUrl {
-                        Color.black
-                        RemoteImage(path: shot, contentMode: .fit, pixelated: true)
-                    } else {
-                        if !covered {
-                            tile(system?.accent ?? Sov.accent)
-                            Text(short).font(.system(size: 28, weight: .black)).foregroundStyle(.white.opacity(0.8))
-                        }
-                        RemoteImage(path: game.image ?? game.thumb, contentMode: wide ? .fill : .fit) { loaded in
-                            if wide { covered = loaded }
-                        }
+        return VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                // Only the Continue row shows where the player left off; the others show box art.
+                if wide, let shot = game.autoSave?.screenshotUrl {
+                    Color.black
+                    RemoteImage(path: shot, contentMode: .fit, pixelated: true)
+                } else {
+                    if !covered {
+                        tile(system?.accent ?? Sov.accent)
+                        Text(short).font(.system(size: 28, weight: .black)).foregroundStyle(.white.opacity(0.8))
+                    }
+                    RemoteImage(path: game.image ?? game.thumb, contentMode: wide ? .fill : .fit) { loaded in
+                        if wide { covered = loaded }
                     }
                 }
-                .aspectRatio(wide ? 16 / 9 : 3 / 4, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(game.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Sov.slate100).lineLimit(1)
-                    let ago = wide ? game.lastPlayedAt.map { " · " + formatAgo(GameIndex.playedAt($0), now: Int64(Date().timeIntervalSince1970)) } ?? "" : ""
-                    releaseLine(game.release, short + ago, first: false).font(.system(size: 12)).foregroundStyle(Sov.slate400).lineLimit(1)
-                }
-                .padding(.horizontal, 2)
             }
-            .frame(width: wide ? 288 : 160)
+            .aspectRatio(wide ? 16 / 9 : 3 / 4, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(game.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(Sov.slate100).lineLimit(1)
+                let ago = wide ? game.lastPlayedAt.map { " · " + formatAgo(GameIndex.playedAt($0), now: Int64(Date().timeIntervalSince1970)) } ?? "" : ""
+                releaseLine(game.release, short + ago, first: false).font(.system(size: 12)).foregroundStyle(Sov.slate400).lineLimit(1)
+            }
+            .padding(.horizontal, 2)
         }
-        .buttonStyle(.plain)
+        .frame(width: wide ? 288 : 160)
     }
 }
 
