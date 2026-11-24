@@ -49,6 +49,7 @@ struct APITests {
         #expect(Documents.sessionOffer.contains("sessionOffer(id: $id, sdp: $sdp, client: $client)"))
         #expect(Documents.sessionOffer.contains("$client: String)"))
         #expect(Documents.loadState.contains("loadState(sessionId: $sessionId, slot: $slot)"))
+        #expect(Documents.nameDevice == "mutation NameDevice($name: String!) { nameDevice(name: $name) }")
         for document in [Documents.viewer, Documents.systems, Documents.games, Documents.startSession] {
             #expect(!document.contains("_"), "camelCase, not snake_case: \(document)")
         }
@@ -176,8 +177,20 @@ struct APITests {
         #expect(MappingScope.everySystem.systemArgument == nil)
     }
 
+    @Test func decodesASystemsSticks() throws {
+        let json = #"{"buttons":[],"sticks":[{"stick":"LEFT","label":"Control stick","key":"LS"},{"stick":"RIGHT","label":"C buttons","key":"RS"}],"layout":{"id":"n64","name":"Nintendo 64","width":160.0,"height":100.0,"body":[],"keys":[]}}"#
+        let controls = try JSONDecoder().decode(SystemControls.self, from: Data(json.utf8))
+        let sticks = remapSticks(controls, scope: .system("n64"))
+        #expect(sticks.map(\.label) == ["Control stick", "C buttons"])
+        #expect(sticks.map(\.stickName) == ["Left stick", "Right stick"])
+        // A stick's row lights its control on the system's pad and the stick on the controller's.
+        let lit = DiagramHighlight(stick: sticks[1])
+        #expect(lit.systemKeys == ["RS"] && lit.controllerKeys == ["r3"])
+        #expect(remapSticks(controls, scope: .everySystem).isEmpty, "only in the system's own scope")
+    }
+
     @Test func decodesSystemControlsAndLayouts() throws {
-        #expect(Documents.controls.contains("system(id: $system) { controls { buttons { button label }"))
+        #expect(Documents.controls.contains("system(id: $system) { controls { buttons { button label } sticks { stick label key }"))
         #expect(Documents.controls.contains("controllerLayouts { id name width height body { x y w h r tone } keys { key label x y w h r } }"))
 
         let info = try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(Fixtures.megadriveControls.utf8), status: 200)
@@ -190,6 +203,7 @@ struct APITests {
         #expect(controls.buttons.prefix(4).map(\.label) == ["Up", "Down", "Left", "Right"])
         #expect(controls.layout.keys.first { $0.key == "UP" }?.label == "↑")
         #expect(controls.buttons.allSatisfy { $0.retroButton != nil })
+        #expect(controls.sticks.isEmpty, "a Mega Drive pad has no sticks")
         #expect(controls.layout.id == "megadrive" && controls.layout.width == 160 && controls.layout.height == 100)
         #expect(!controls.layout.body.isEmpty)
         #expect(Set(controls.layout.keys.map(\.key)) == Set(controls.buttons.map(\.button)), "every button is drawn")

@@ -86,7 +86,7 @@ struct ConnectView: View {
         do {
             // A refusal carries the server's `error_description` ("Wrong username or password.").
             try await api.signIn(username: username, password: password)
-            model.signedIn = true
+            model.signedInAnew()
         } catch {
             self.error = error.localizedDescription
         }

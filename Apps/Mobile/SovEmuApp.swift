@@ -87,6 +87,25 @@ final class AppModel {
         return api
     }
 
+    /// The device name last given to this sign-in (`nameDevice`); cleared by a new sign-in.
+    private static let namedDeviceKey = "namedDevice"
+
+    /// A new sign-in on the server: it has no device name yet.
+    func signedInAnew() {
+        UserDefaults.standard.removeObject(forKey: Self.namedDeviceKey)
+        signedIn = true
+    }
+
+    /// Names this sign-in's device on the server once (and again after an update changes the
+    /// version), for the admin's Devices page. Best effort: unnamed, it only shows as "App".
+    func nameDevice() async {
+        let name = ClientEvents.deviceName
+        guard let api, UserDefaults.standard.string(forKey: Self.namedDeviceKey) != name else { return }
+        if (try? await api.nameDevice(name)) != nil {
+            UserDefaults.standard.set(name, forKey: Self.namedDeviceKey)
+        }
+    }
+
     func signOut() async {
         await api?.signOut()
         signedIn = false
@@ -171,12 +190,18 @@ struct RootView: View {
                 } catch {}
             }
             checked = true
-            if model.signedIn { library.refresh() }
+            if model.signedIn {
+                library.refresh()
+                await model.nameDevice()
+            }
             idle.install()
         }
         .onChange(of: model.signedIn) { _, signedIn in
             library.clear()
-            if signedIn { library.refresh() }
+            if signedIn {
+                library.refresh()
+                Task { await model.nameDevice() }
+            }
         }
         // The screensaver, after the chosen minutes without input in the menus.
         .task(id: settings.screensaverMinutes) {

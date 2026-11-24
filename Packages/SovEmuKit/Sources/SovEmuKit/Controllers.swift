@@ -499,6 +499,19 @@ public struct DiagramHighlight: Equatable, Sendable {
         systemKeys = [button.name]
         controllerKeys = Set(mapping.inputs(for: button).map(diagramKey).filter { PadInput(rawValue: $0) != nil })
     }
+
+    /// A system's analog control: its key on the system's pad, and its stick on the controller's.
+    public init(stick: SystemStick) {
+        systemKeys = [stick.key]
+        controllerKeys = [stick.controllerKey]
+    }
+}
+
+/// The analog controls the remap screen lists after the buttons: the system's, in its own scope
+/// only. They show their stick and are never rebound.
+public func remapSticks(_ controls: SystemControls?, scope: MappingScope) -> [SystemStick] {
+    if case .system = scope, let controls { return controls.sticks }
+    return []
 }
 
 /// The rows the remap screen lists for a scope: the system's buttons with its labels (Mega

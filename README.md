@@ -91,3 +91,10 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
 - **Fast-forward:** hold Select+R. **Rewind:** hold Select+L. (After mapping: the RetroPad
   buttons, wherever they are bound.)
 - **Touch controller:** shown when no controller or keyboard is connected.
+
+## Licence
+
+Free software under the [GNU Affero General Public License v3.0 or later](LICENSE)
+(`AGPL-3.0-or-later`), as the SovEmu server is. You may use, change and share it; if you give
+others a modified version, or run one they use over a network, you must offer them its source.
+Its dependencies keep their own licences.

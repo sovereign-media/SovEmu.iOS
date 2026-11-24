@@ -154,6 +154,16 @@ final class GameMenu {
                     detail: "←  " + (inputs.isEmpty ? "—" : inputs.joined(separator: ", ")),
                     action: { [weak self] in self?.startCapture(device, button, label: entry.label) }))
             }
+            // The system's analog controls: always their own stick, so shown but never rebound.
+            if !identity.isKeyboard {
+                for stick in remapSticks(info?.controls, scope: scope) {
+                    rows.append(MenuItem(
+                        id: "stick:" + stick.key, title: stick.label, detail: "←  " + stick.stickName,
+                        action: { [weak self] in
+                            self?.flash("\(stick.label) is always the \(stick.stickName.lowercased()): sticks are not remapped")
+                        }))
+                }
+            }
             // Only the user's own mapping in this scope can be reset; a default is in force.
             if mappings.canReset(identity.id, in: scope) {
                 rows.append(MenuItem(id: "reset", title: "Reset to defaults", action: { [weak self] in self?.reset(identity) }))
@@ -196,7 +206,10 @@ final class GameMenu {
         let systemLayout = scope == .everySystem ? nil : info?.controls?.layout
         let controllerLayout = device.identity.isKeyboard ? nil : info?.layout(for: device.identity.family)
         guard systemLayout != nil || controllerLayout != nil else { return nil }
-        return Diagrams(system: systemLayout, controller: controllerLayout, highlight: DiagramHighlight(button: button, mapping: mapping))
+        let stick = capture == nil && rows.indices.contains(focus)
+            ? remapSticks(info?.controls, scope: scope).first { "stick:" + $0.key == rows[focus].id } : nil
+        let highlight = stick.map { DiagramHighlight(stick: $0) } ?? DiagramHighlight(button: button, mapping: mapping)
+        return Diagrams(system: systemLayout, controller: controllerLayout, highlight: highlight)
     }
 
     // MARK: Actions
