@@ -111,20 +111,25 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     public let rendering: String?
     /// A BIOS file it cannot start games without is missing.
     public let biosMissing: Bool
+    /// The shape of its games' boxes, width over height (SNES landscape, NES portrait): its game
+    /// cards take it, so box art fills them.
+    public let boxAspect: Double
 
-    static let fields = "id name short manufacturer year color gameCount playable needsGpu rendering biosMissing"
+    static let fields = "id name short manufacturer year color gameCount playable needsGpu rendering biosMissing boxAspect"
 
     public init(
         id: String, name: String, short: String, manufacturer: String = "", year: Int = 0, color: String = "#4169e1",
-        gameCount: Int = 0, playable: Bool = true, needsGpu: Bool = false, rendering: String? = nil, biosMissing: Bool = false
+        gameCount: Int = 0, playable: Bool = true, needsGpu: Bool = false, rendering: String? = nil, biosMissing: Bool = false,
+        boxAspect: Double = defaultBoxAspect
     ) {
+        self.boxAspect = boxAspect
         (self.id, self.name, self.short, self.manufacturer, self.year, self.color) = (id, name, short, manufacturer, year, color)
         (self.gameCount, self.playable, self.needsGpu, self.rendering, self.biosMissing) =
             (gameCount, playable, needsGpu, rendering, biosMissing)
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, short, manufacturer, year, color, gameCount, playable, needsGpu, rendering, biosMissing
+        case id, name, short, manufacturer, year, color, gameCount, playable, needsGpu, rendering, biosMissing, boxAspect
     }
 
     public init(from decoder: Decoder) throws {
@@ -141,6 +146,7 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
         rendering = try c.decodeIfPresent(String.self, forKey: .rendering)
         // A server from before it said is taken at its word that nothing is missing.
         biosMissing = try c.decodeIfPresent(Bool.self, forKey: .biosMissing) ?? false
+        boxAspect = try c.decodeIfPresent(Double.self, forKey: .boxAspect) ?? defaultBoxAspect
     }
 
     /// The accent colour as (red, green, blue) in 0...1.

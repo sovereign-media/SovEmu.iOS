@@ -156,7 +156,7 @@ private struct Slide: View {
                     if wide {
                         HStack {
                             Spacer()
-                            RemoteImage(path: game.thumb, contentMode: .fit)
+                            RemoteImage(path: game.cover ?? game.thumb, contentMode: .fit)
                                 .aspectRatio(3 / 4, contentMode: .fit)
                                 .frame(maxHeight: .infinity)
                                 .padding(.vertical, 40)
@@ -249,7 +249,7 @@ struct GameCard: View {
                         tile(system?.accent ?? Sov.accent)
                         Text(short).font(.system(size: 28, weight: .black)).foregroundStyle(.white.opacity(0.8))
                     }
-                    RemoteImage(path: game.image ?? game.thumb, contentMode: wide ? .fill : .fit) { loaded in
+                    RemoteImage(path: game.imageSmall ?? game.thumb, contentMode: wide ? .fill : .fit) { loaded in
                         if wide { covered = loaded }
                     }
                 }

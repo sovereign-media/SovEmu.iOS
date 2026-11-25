@@ -192,7 +192,7 @@ struct LibraryTests {
         // What an older server leaves out has its plain default.
         let thin = try decode([Game].self, "search", #"{"data":{"search":[{"id":1,"system":"nes","title":"A"}]}}"#)
         #expect(thin.first?.discs == 1 && thin.first?.favourite == false && thin.first?.path == "")
-        #expect(Game.fields.contains("thumb: mediaUrl(kind: THUMB)") && Game.fields.contains("autoSave { slot savedAt screenshotUrl }"))
+        #expect(Game.fields.contains("thumb: mediaUrl(kind: THUMB, width: 400)") && Game.fields.contains("autoSave { slot savedAt screenshotUrl }"))
     }
 
     @Test func decodesStartProgressWithPhasesANewerServerAdds() throws {
