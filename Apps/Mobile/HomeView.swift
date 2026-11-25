@@ -54,6 +54,9 @@ private struct HomeContent: View {
                 if !feed.added.isEmpty {
                     HomeRow(title: "Recently added", symbol: "sparkles") { ForEach(feed.added) { GameCard(game: $0, wide: false) } }
                 }
+                if !feed.topRated.isEmpty {
+                    HomeRow(title: "Top rated", symbol: "star") { ForEach(feed.topRated) { GameCard(game: $0, wide: false) } }
+                }
                 ForEach(feed.collections.filter { !$0.games.isEmpty }) { c in
                     HomeRow(title: c.name, symbol: "folder") { ForEach(c.games) { GameCard(game: $0, wide: false) } }
                 }
