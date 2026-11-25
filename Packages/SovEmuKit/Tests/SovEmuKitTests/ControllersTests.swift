@@ -366,3 +366,56 @@ struct ControllersTests {
         #expect(DiagramHighlight(button: .l, mapping: bound).controllerKeys == ["l3"])
     }
 }
+
+/// Rebinding: SovEmu.Android's `ControllersTest` rebinding cases, case for case.
+struct RebindCaptureTests {
+    @Test func aQuickTapOfBackCancels() {
+        var c = RebindCapture(back: "east", alreadyHeld: [], startMs: 0)
+        #expect(c.update(held: ["east"], nowMs: 100) == .waiting)
+        #expect(c.update(held: ["east"], nowMs: 900) == .waiting)
+        #expect(c.update(held: [], nowMs: 950) == .cancel(timedOut: false))
+    }
+
+    @Test func holdingBackForASecondBindsItWithoutWaitingForRelease() {
+        var c = RebindCapture(back: "Escape", alreadyHeld: [], startMs: 0)
+        #expect(c.update(held: ["Escape"], nowMs: 500) == .waiting)
+        #expect(c.update(held: ["Escape"], nowMs: 1499) == .waiting)
+        #expect(c.update(held: ["Escape"], nowMs: 1500) == .bind("Escape"))
+    }
+
+    @Test func anyOtherNewInputBindsAtOnce() {
+        var a = RebindCapture(back: "east", alreadyHeld: [], startMs: 0)
+        #expect(a.update(held: ["south"], nowMs: 10) == .bind("south"))
+        // Even while Back is being held.
+        var c = RebindCapture(back: "east", alreadyHeld: [], startMs: 0)
+        _ = c.update(held: ["east"], nowMs: 10)
+        #expect(c.update(held: ["east", "l2"], nowMs: 200) == .bind("l2"))
+    }
+
+    @Test func inputsHeldAtTheStartAreIgnoredUntilReleased() {
+        var c = RebindCapture(back: "east", alreadyHeld: ["south", "east"], startMs: 0)
+        #expect(c.update(held: ["south", "east"], nowMs: 2000) == .waiting, "a held Back neither binds nor cancels")
+        #expect(c.update(held: [], nowMs: 2100) == .waiting)
+        #expect(c.update(held: ["south"], nowMs: 2200) == .bind("south"))
+    }
+
+    @Test func guideCancels() {
+        var c = RebindCapture(back: "east", alreadyHeld: [], startMs: 0)
+        _ = c.update(held: ["east"], nowMs: 10)
+        #expect(c.update(held: ["east"], nowMs: 20, guide: true) == .cancel(timedOut: false))
+    }
+
+    @Test func eightSecondsWithoutANewInputCancels() {
+        var c = RebindCapture(back: "east", alreadyHeld: ["north"], startMs: 1000)
+        #expect(c.update(held: ["north"], nowMs: 8999) == .waiting)
+        #expect(c.update(held: ["north"], nowMs: 9000) == .cancel(timedOut: true))
+        #expect(RebindCapture.backInput(isKeyboard: true) == KeyNames.menu)
+        #expect(RebindCapture.backInput(isKeyboard: false) == "east")
+    }
+
+    @Test func anInputThatCannotBeBoundIsPassedOver() {
+        var c = RebindCapture(back: "east", alreadyHeld: [], startMs: 0, bindable: { $0 != "home" })
+        #expect(c.update(held: ["home"], nowMs: 10) == .waiting)
+        #expect(c.update(held: ["home", "north"], nowMs: 20) == .bind("north"))
+    }
+}

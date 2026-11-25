@@ -633,3 +633,55 @@ extension MenuAction {
         }
     }
 }
+
+/// Waiting for the input to bind to a button, on one device (docs/CONTROLLERS.md, "Remapping"),
+/// as SovEmu.Android's `RebindCapture` and SovEmu.Web's: fed the inputs held and a clock. Any
+/// other new input binds at once; the menu Back input (`back`: `east` on a pad, `Escape` on a
+/// keyboard) cancels on a quick tap and binds once held for `holdMs`; home/guide cancels;
+/// `timeoutMs` without a new input cancels. Inputs held when the wait starts are ignored until
+/// released. `bindable` says which inputs may be bound at all (a key the app reserves may not).
+public struct RebindCapture: Sendable {
+    public enum Outcome: Sendable, Equatable {
+        case waiting
+        case bind(String)
+        case cancel(timedOut: Bool)
+    }
+
+    public static let holdMs: Int64 = 1000
+    public static let timeoutMs: Int64 = 8000
+
+    private let back: String
+    private let bindable: @Sendable (String) -> Bool
+    private var ignored: Set<String>
+    private var backSince: Int64?
+    private var lastInput: Int64
+
+    public init(back: String, alreadyHeld: Set<String>, startMs: Int64, bindable: @escaping @Sendable (String) -> Bool = { _ in true }) {
+        (self.back, self.ignored, self.lastInput, self.bindable) = (back, alreadyHeld, startMs, bindable)
+    }
+
+    /// `held`: the device's inputs held now; `guide`: home/guide (or a keyboard's Escape on a
+    /// pad's capture) was pressed. Call often.
+    public mutating func update(held: Set<String>, nowMs: Int64, guide: Bool = false) -> Outcome {
+        if guide { return .cancel(timedOut: false) }
+        ignored.formIntersection(held)
+        let fresh = held.subtracting(ignored)
+        if let input = fresh.subtracting([back]).filter(bindable).sorted().first { return .bind(input) }
+        switch (fresh.contains(back), backSince) {
+        case (true, nil):
+            backSince = nowMs
+            lastInput = nowMs
+        case let (true, since?) where nowMs - since >= Self.holdMs:
+            return .bind(back)
+        case (false, _?):
+            return .cancel(timedOut: false)
+        default:
+            break
+        }
+        if backSince == nil && nowMs - lastInput >= Self.timeoutMs { return .cancel(timedOut: true) }
+        return .waiting
+    }
+
+    /// The input that is the menu's Back on this kind of device.
+    public static func backInput(isKeyboard: Bool) -> String { isKeyboard ? KeyNames.menu : PadInput.east.rawValue }
+}
