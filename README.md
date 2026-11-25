@@ -29,7 +29,9 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
 ## Using it
 
 1. First-run setup (the admin account) happens in a browser at the server's address.
-2. In the app, enter the server address (for example `http://192.168.1.20:8080`) and sign in.
+2. In the app, enter the server address (for example `http://192.168.1.20:8080`) and sign in:
+   *Sign in with your phone* shows a code (and a QR code) to approve at the server's `/device`
+   page in a signed-in browser, or use a password, where the server allows one.
    iOS asks for local-network access the first time.
 3. The server must advertise an address the device can reach (`SOVEMU_ADVERTISE_IP`, the host's
    LAN address), with UDP 50000-50009 open.

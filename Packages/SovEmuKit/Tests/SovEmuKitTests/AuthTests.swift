@@ -351,7 +351,7 @@ struct BootstrapTests {
     /// The server's answer: every field the query selects, null where `config` names none.
     static func reply(_ config: [String: Any?]) -> (Int, String) {
         let selected = [
-            "signInAvailable", "address", "issuer", "webClientId", "nativeClientId", "authorizationEndpoint", "tokenEndpoint",
+            "signInAvailable", "address", "issuer", "webClientId", "deviceClientId", "authorizationEndpoint", "tokenEndpoint",
             "revocationEndpoint", "deviceAuthorizationEndpoint", "verificationUri", "passwordEndpoint",
         ]
         let fields = Dictionary(uniqueKeysWithValues: selected.map { ($0, (config[$0] ?? nil) ?? NSNull()) })
@@ -365,7 +365,7 @@ struct BootstrapTests {
                 // Paths the app could not guess, to show it takes them from the answer.
                 Self.reply([
                     "signInAvailable": true, "address": "stub", "issuer": "http://stub", "webClientId": "web",
-                    "nativeClientId": "phone-app", "authorizationEndpoint": "/sso/authorize", "tokenEndpoint": "/sso/token",
+                    "deviceClientId": "phone-app", "authorizationEndpoint": "/sso/authorize", "tokenEndpoint": "/sso/token",
                     "revocationEndpoint": "/sso/revoke", "deviceAuthorizationEndpoint": "/sso/device", "verificationUri": "/link",
                     "passwordEndpoint": "/sso/native/password",
                 ])
@@ -384,7 +384,8 @@ struct BootstrapTests {
         // Relative endpoints are resolved against the server address.
         #expect(await auth.endpoints == SignInEndpoints(
             clientId: "phone-app", token: stub.base.appending(path: "sso/token"),
-            revocation: stub.base.appending(path: "sso/revoke"), password: stub.base.appending(path: "sso/native/password")))
+            revocation: stub.base.appending(path: "sso/revoke"), password: stub.base.appending(path: "sso/native/password"),
+            deviceAuthorization: stub.base.appending(path: "sso/device")))
 
         try await api.signIn(username: "ada", password: "pw")
         #expect(try await auth.refresh(replacing: "a1") == "a2")
@@ -408,7 +409,7 @@ struct BootstrapTests {
     @Test func aServerWithoutPasswordSignInSaysSo() async throws {
         let stub = Stub { _, _ in
             Self.reply([
-                "signInAvailable": true, "address": "tv.local", "nativeClientId": "sovemu-native",
+                "signInAvailable": true, "address": "tv.local", "deviceClientId": "sovemu-native",
                 "tokenEndpoint": "http://tv.local/oauth/token", "revocationEndpoint": "http://tv.local/oauth/revoke",
                 "deviceAuthorizationEndpoint": "http://tv.local/oauth/device_authorization", "passwordEndpoint": nil,
             ])
@@ -416,8 +417,10 @@ struct BootstrapTests {
         let store = MemoryTokenStore()
         let auth = TokenClient(baseURL: stub.base, endpoints: nil, store: store, session: stub.session)
         let config = try await SovEmuAPI(baseURL: stub.base, auth: auth, session: stub.session).bootstrap()
-        let message = "This server signs in with a code shown on the screen, which this version of the app can't do yet."
-        #expect(config.signInProblem == message)
+        // A code still signs in: no problem, only no password.
+        #expect(config.signInProblem == nil)
+        #expect(config.canPair && !config.canUsePassword)
+        let message = "This server signs in only with a code shown on the screen."
         // Refresh and sign-out still have their endpoints; only the password is missing.
         let endpoints = await auth.endpoints
         #expect(endpoints?.password == nil && endpoints?.token.absoluteString == "http://tv.local/oauth/token")
@@ -436,11 +439,11 @@ struct BootstrapTests {
 
     @Test func asksForEveryEndpointItSignsInWith() throws {
         let document = SovEmuGraphQL.BootstrapQuery.operationDocument.definition?.queryDocument ?? ""
-        for field in ["signInAvailable", "address", "nativeClientId", "tokenEndpoint", "revocationEndpoint", "passwordEndpoint"] {
+        for field in ["signInAvailable", "address", "deviceClientId", "tokenEndpoint", "revocationEndpoint", "passwordEndpoint"] {
             #expect(document.contains(field), "\(field)")
         }
         // A persisted answer reads back the same.
-        let config = BootstrapConfig(signInAvailable: true, address: "a", nativeClientId: "n", tokenEndpoint: "http://a/t", passwordEndpoint: "http://a/p")
+        let config = BootstrapConfig(signInAvailable: true, address: "a", deviceClientId: "n", tokenEndpoint: "http://a/t", passwordEndpoint: "http://a/p")
         #expect(try JSONDecoder().decode(BootstrapConfig.self, from: JSONEncoder().encode(config)) == config)
     }
 }

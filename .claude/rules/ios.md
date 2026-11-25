@@ -59,9 +59,11 @@ below are from the parent repository's root.
 - **One client per server, no cache**: `BearerInterceptor` adds the access token and spends one
   refresh-and-retry on `UNAUTHENTICATED` (or a 401); every failure reaches callers as `APIError`.
   GraphQL `Int` arguments are `Int32` (`int32(_:)`).
-- **Every sign-in URL and the client id come from `bootstrapConfig`**; only `/graphql` is fixed.
-  The app signs in with the password fallback; the device grant is not built yet (a code-only
-  server shows `codeOnlyMessage`). `TokenClient` (an actor) refreshes one at a time and rotates the
+- **Every sign-in URL and the client id come from `bootstrapConfig`** (`deviceClientId`: the app
+  signs in as the device client); only `/graphql` is fixed. As on Sovereign's TVs and SovEmu.Android:
+  *Sign in with your phone* (the device grant, `DevicePairing.swift`'s `awaitApproval`, the view
+  `PairingView` with Core Image's QR code), with the password as the fallback, and only the code
+  when the server has the password off. `TokenClient` (an actor) refreshes one at a time and rotates the
   refresh token, kept in the Keychain this-device-only; the access token stays in memory.
 
 ## Before a PR

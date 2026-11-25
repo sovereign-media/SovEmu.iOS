@@ -43,7 +43,8 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
     public let address: String
     public let issuer: String?
     public let webClientId: String?
-    public let nativeClientId: String?
+    /// The client the app signs in as, with a code or a password.
+    public let deviceClientId: String?
     public let authorizationEndpoint: String?
     public let tokenEndpoint: String?
     public let revocationEndpoint: String?
@@ -54,7 +55,7 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
 
     public init(
         signInAvailable: Bool, address: String, issuer: String? = nil, webClientId: String? = nil,
-        nativeClientId: String? = nil, authorizationEndpoint: String? = nil, tokenEndpoint: String? = nil,
+        deviceClientId: String? = nil, authorizationEndpoint: String? = nil, tokenEndpoint: String? = nil,
         revocationEndpoint: String? = nil, deviceAuthorizationEndpoint: String? = nil, verificationUri: String? = nil,
         passwordEndpoint: String? = nil
     ) {
@@ -62,7 +63,7 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
         self.address = address
         self.issuer = issuer
         self.webClientId = webClientId
-        self.nativeClientId = nativeClientId
+        self.deviceClientId = deviceClientId
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.revocationEndpoint = revocationEndpoint
@@ -72,24 +73,32 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
     }
 
 
-    static let codeOnlyMessage =
-        "This server signs in with a code shown on the screen, which this version of the app can't do yet."
+    static let codeOnlyMessage = "This server signs in only with a code shown on the screen."
 
-    /// Why this app cannot sign in here, for people; nil when it can.
+    /// Why this app cannot sign in here, for people; nil when it can (with a code, a password,
+    /// or both).
     public var signInProblem: String? {
-        if !signInAvailable || endpoints(relativeTo: nil) == nil {
+        guard signInAvailable, let endpoints = endpoints(relativeTo: nil) else {
             return "Signing in isn't available at \(address). Add it to SOVEMU_PUBLIC_URL on the server."
         }
-        if passwordEndpoint == nil { return Self.codeOnlyMessage }
+        if endpoints.password == nil && endpoints.deviceAuthorization == nil { return "The server sent no sign-in details." }
         return nil
     }
+
+    /// Whether the app can sign in with a code approved on another screen.
+    public var canPair: Bool { signInAvailable && deviceAuthorizationEndpoint != nil }
+
+    /// Whether the app can sign in with a username and password.
+    public var canUsePassword: Bool { signInAvailable && passwordEndpoint != nil }
 
     /// The client's endpoints, resolved against the server address when relative; nil when
     /// nothing can sign in here.
     public func endpoints(relativeTo base: URL?) -> SignInEndpoints? {
         func url(_ string: String?) -> URL? { string.flatMap { URL(string: $0, relativeTo: base)?.absoluteURL } }
-        guard signInAvailable, let clientId = nativeClientId, let token = url(tokenEndpoint) else { return nil }
-        return SignInEndpoints(clientId: clientId, token: token, revocation: url(revocationEndpoint), password: url(passwordEndpoint))
+        guard signInAvailable, let clientId = deviceClientId, let token = url(tokenEndpoint) else { return nil }
+        return SignInEndpoints(
+            clientId: clientId, token: token, revocation: url(revocationEndpoint), password: url(passwordEndpoint),
+            deviceAuthorization: url(deviceAuthorizationEndpoint))
     }
 }
 
@@ -415,6 +424,18 @@ public final class SovEmuAPI: Sendable {
     public func signIn(username: String, password: String) async throws {
         guard let auth else { throw AuthError.signedOut }
         try await auth.signIn(username: username, password: password)
+    }
+
+    /// A code to show, to sign in by approving it on another screen (after `bootstrap`).
+    public func requestDeviceCode() async throws -> DeviceCode {
+        guard let auth else { throw AuthError.signedOut }
+        return try await auth.requestDeviceCode()
+    }
+
+    /// One poll for `code`'s approval; `.approved` means signed in.
+    public func pollDeviceCode(_ code: DeviceCode) async throws -> DevicePoll {
+        guard let auth else { return .refused(.failed) }
+        return try await auth.pollDeviceCode(code)
     }
 
     /// Revokes the sign-in and forgets the tokens (also when the server cannot be reached).
