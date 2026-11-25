@@ -18,12 +18,14 @@ import Testing
         #expect(q.take().first?.first?.message.count == ClientEventQueue.maxMessage)
     }
 
-    @Test func eventsBecomeTheMutationsVariables() {
+    @Test func eventsBecomeTheMutationsInput() {
         let event = ClientEvent(kind: .streamStalled, message: "no new picture", sessionId: nil, at: 2.5)
-        let variables = SovEmuAPI.eventVariables(client: "ios", events: [event])
-        #expect(variables["client"] == .string("ios"))
-        #expect(variables["events"] == .list([.object([
-            "kind": .string("STREAM_STALLED"), "message": .string("no new picture"), "sessionId": .null, "at": .double(2.5),
-        ])]))
+        let mutation = SovEmuAPI.report(client: "ios", events: [event])
+        #expect(mutation.client == "ios")
+        let input = mutation.events[0]
+        #expect(input.kind.rawValue == "STREAM_STALLED" && input.message == "no new picture")
+        // No session is an explicit null, as the schema's `sessionId: ID` takes it.
+        #expect(input.sessionId == .null)
+        #expect(input.at == .some(2.5))
     }
 }

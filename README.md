@@ -11,7 +11,7 @@ Checked out as a submodule of `SovEmu` (unpinned, `branch = main`); it builds on
 | Path | What |
 |---|---|
 | `project.yml` | The Xcode project's source of truth (XcodeGen). `SovEmu.xcodeproj` is generated and gitignored. |
-| `Packages/SovEmuKit` | Swift 6 package: the input wire protocol, the API client and models, and the logic the screens draw (the game list's search, filters, sorts and A–Z jump; the start's progress bar; the button-to-frame measurement and the stats rows), ported from SovEmu.Android's `core` with the same test cases. Its protocol tests use the same byte vectors as `SovEmu.Protocol`, `SovEmu.Web` and `SovEmu.Android`. |
+| `Packages/SovEmuKit` | Swift 6 package: the input wire protocol, the API client (Apollo iOS, its operations in `Sources/SovEmuKit/GraphQL/operations.graphql`, generated into `Generated/` from a copy of SovEmu's `schema.graphql`) and models, and the logic the screens draw (the game list's search, filters, sorts and A–Z jump; the start's progress bar; the button-to-frame measurement and the stats rows), ported from SovEmu.Android's `core` with the same test cases. Its protocol tests use the same byte vectors as `SovEmu.Protocol`, `SovEmu.Web` and `SovEmu.Android`. |
 | `Apps/Mobile` | The SwiftUI app, after the Android app's screens: sign-in; Home, Search, Systems and the account as tabs (a sidebar on an iPad); a system's cover grid and game panel; the player (WebRTC via `stasel/WebRTC`, GameController input, touch controller); the screensaver and menu music. |
 
 ## Building
@@ -19,6 +19,7 @@ Checked out as a submodule of `SovEmu` (unpinned, `branch = main`); it builds on
 You need Xcode 26+ and XcodeGen (`brew install xcodegen`).
 
 ```bash
+scripts/codegen.sh           # after changing a .graphql document (scripts/sync-schema.sh: a new server schema)
 (cd Packages/SovEmuKit && swift test)
 scripts/fetch-webrtc.sh      # the pinned WebRTC xcframework, into Packages/WebRTC (gitignored)
 xcodegen generate

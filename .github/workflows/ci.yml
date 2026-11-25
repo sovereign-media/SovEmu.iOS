@@ -18,6 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: GraphQL codegen is current
+        run: scripts/codegen.sh --check
+
       - name: SovEmuKit tests
         working-directory: Packages/SovEmuKit
         run: swift test

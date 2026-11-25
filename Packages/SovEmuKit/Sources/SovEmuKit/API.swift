@@ -1,6 +1,13 @@
+import Apollo
+import ApolloAPI
 import Foundation
 
-// MARK: - Models: the shapes of the SovEmu GraphQL API (`SovEmu.Server/schema.graphql`).
+// MARK: - Models: what the app reads from the SovEmu GraphQL API.
+//
+// The operations are `GraphQL/operations.graphql`, generated into `Generated/` by Apollo
+// (`scripts/codegen.sh`) and checked there against `GraphQL/schema.graphqls`, a copy of
+// SovEmu's `SovEmu.Backend/SovEmu.Server/schema.graphql`. The generated types stay internal;
+// `GraphQLMapping.swift` turns them into these.
 
 public struct User: Codable, Sendable, Equatable {
     public let id: Int64
@@ -13,18 +20,12 @@ public struct User: Codable, Sendable, Equatable {
         (self.id, self.username, self.isAdmin, self.role) = (id, username, isAdmin, role)
     }
 
-    static let fields = "id username isAdmin role"
 }
 
 /// What a user may do (`Role`).
 public enum Role: String, Codable, Sendable {
     case viewer = "VIEWER"
     case admin = "ADMIN"
-
-    public init(from decoder: Decoder) throws {
-        // A role a newer server adds grants nothing more than viewing.
-        self = Role(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .viewer
-    }
 }
 
 /// `Viewer`: who is signed in, and whether first-run setup is needed.
@@ -70,10 +71,6 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
         self.passwordEndpoint = passwordEndpoint
     }
 
-    static let fields = """
-        signInAvailable address issuer webClientId nativeClientId authorizationEndpoint tokenEndpoint \
-        revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint
-        """
 
     static let codeOnlyMessage =
         "This server signs in with a code shown on the screen, which this version of the app can't do yet."
@@ -115,7 +112,6 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     /// cards take it, so box art fills them.
     public let boxAspect: Double
 
-    static let fields = "id name short manufacturer year color gameCount playable needsGpu rendering biosMissing boxAspect"
 
     public init(
         id: String, name: String, short: String, manufacturer: String = "", year: Int = 0, color: String = "#4169e1",
@@ -126,27 +122,6 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
         (self.id, self.name, self.short, self.manufacturer, self.year, self.color) = (id, name, short, manufacturer, year, color)
         (self.gameCount, self.playable, self.needsGpu, self.rendering, self.biosMissing) =
             (gameCount, playable, needsGpu, rendering, biosMissing)
-    }
-
-    enum CodingKeys: String, CodingKey {
-        case id, name, short, manufacturer, year, color, gameCount, playable, needsGpu, rendering, biosMissing, boxAspect
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(String.self, forKey: .id)
-        name = try c.decode(String.self, forKey: .name)
-        short = try c.decode(String.self, forKey: .short)
-        manufacturer = try c.decode(String.self, forKey: .manufacturer)
-        year = try c.decode(Int.self, forKey: .year)
-        color = try c.decode(String.self, forKey: .color)
-        gameCount = try c.decode(Int.self, forKey: .gameCount)
-        playable = try c.decode(Bool.self, forKey: .playable)
-        needsGpu = try c.decode(Bool.self, forKey: .needsGpu)
-        rendering = try c.decodeIfPresent(String.self, forKey: .rendering)
-        // A server from before it said is taken at its word that nothing is missing.
-        biosMissing = try c.decodeIfPresent(Bool.self, forKey: .biosMissing) ?? false
-        boxAspect = try c.decodeIfPresent(Double.self, forKey: .boxAspect) ?? defaultBoxAspect
     }
 
     /// The accent colour as (red, green, blue) in 0...1.
@@ -172,7 +147,6 @@ public struct SessionInfo: Codable, Sendable {
     public let discs: Int?
     public let disc: Int?
 
-    static let fields = "id gameId system title core width height fps connected discs disc"
 }
 
 public struct IceServer: Codable, Sendable {
@@ -207,7 +181,6 @@ public struct ControllerBinding: Codable, Sendable, Equatable {
         self.button = button
     }
 
-    static let fields = "input button"
 }
 
 /// Where a mapping in force comes from (`MappingSource`).
@@ -221,11 +194,6 @@ public enum MappingSource: String, Codable, Sendable {
 
     /// A server default rather than the user's own.
     public var isDefault: Bool { self != .user }
-
-    public init(from decoder: Decoder) throws {
-        // A source a newer server adds is still a default, not the user's.
-        self = MappingSource(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .admin
-    }
 }
 
 /// The mapping in force for one controller model, on one system or on every system: the
@@ -247,7 +215,6 @@ public struct ControllerMapping: Codable, Sendable, Equatable {
         self.source = source
     }
 
-    static let fields = "controller system name bindings { \(ControllerBinding.fields) } source"
 }
 
 // MARK: - Controls and diagrams (`System.controls`, `controllerLayouts`)
@@ -291,7 +258,6 @@ public struct PadLayout: Codable, Sendable, Equatable {
         (self.id, self.name, self.width, self.height, self.body, self.keys) = (id, name, width, height, body, keys)
     }
 
-    static let fields = "id name width height body { x y w h r tone } keys { key label x y w h r }"
 
     /// The part of the canvas worth drawing: the bounding box of every shape and key, 3 units
     /// wider all round, within the canvas (as the web client crops), so a flat pad does not
@@ -358,22 +324,13 @@ public struct SystemControls: Codable, Sendable, Equatable {
 
 /// What the remap screen draws: the system's controls (nil for an unknown system) and the
 /// controllers' diagrams by family.
-public struct ControlsInfo: Decodable, Sendable, Equatable {
+public struct ControlsInfo: Sendable, Equatable {
     public let controls: SystemControls?
     public let controllerLayouts: [PadLayout]
 
     public init(controls: SystemControls?, controllerLayouts: [PadLayout]) {
         self.controls = controls
         self.controllerLayouts = controllerLayouts
-    }
-
-    enum CodingKeys: String, CodingKey { case system, controllerLayouts }
-    struct SystemField: Decodable { let controls: SystemControls }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        controls = try c.decodeIfPresent(SystemField.self, forKey: .system)?.controls
-        controllerLayouts = try c.decode([PadLayout].self, forKey: .controllerLayouts)
     }
 
     /// The diagram for a controller family, else the generic one.
@@ -405,138 +362,28 @@ public struct APIError: Error, LocalizedError, Sendable {
     }
 }
 
-// MARK: - GraphQL wire format
-
-/// A GraphQL variable value. Only the kinds the app sends.
-public enum GraphQLValue: Encodable, Sendable, Equatable {
-    case string(String)
-    case int(Int)
-    case double(Double)
-    case bool(Bool)
-    case list([GraphQLValue])
-    case object([String: GraphQLValue])
-    case null
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
-        switch self {
-        case .string(let v): try c.encode(v)
-        case .int(let v): try c.encode(v)
-        case .double(let v): try c.encode(v)
-        case .bool(let v): try c.encode(v)
-        case .list(let v): try c.encode(v)
-        case .object(let v): try c.encode(v)
-        case .null: try c.encodeNil()
-        }
-    }
-}
-
-/// The body of `POST /graphql`.
-struct GraphQLRequest: Encodable {
-    let query: String
-    let variables: [String: GraphQLValue]
-}
-
-/// The body of every `/graphql` answer (HTTP 200 even when it failed).
-struct GraphQLResponse<T: Decodable>: Decodable {
-    struct Failure: Decodable {
-        struct Extensions: Decodable { let code: String? }
-        let message: String
-        let extensions: Extensions?
-    }
-    let data: T?
-    let errors: [Failure]?
-}
-
-// MARK: - Documents
-
-/// The query documents the app sends, written by hand against `schema.graphql`.
-enum Documents {
-    static let bootstrapConfig = "query BootstrapConfig { bootstrapConfig { \(BootstrapConfig.fields) } }"
-    static let viewer = "query Viewer { viewer { setupRequired user { \(User.fields) } } }"
-    static let clientConfig = "query ClientConfig { clientConfig { iceServers } }"
-    static let systems = "query Systems { systems { \(SystemSummary.fields) } }"
-    static let games = "query Games($system: ID!) { system(id: $system) { games { \(Game.fields) } } }"
-    static let startSession = """
-        mutation StartSession($gameId: Int!, $startId: String) { \
-        startSession(gameId: $gameId, startId: $startId) { \(SessionInfo.fields) } }
-        """
-    static let startProgress = """
-        query StartProgress($startId: String!) { startProgress(startId: $startId) { \(StartStatus.fields) } }
-        """
-    static let home = """
-        query Home { home { featured { \(Game.fields) } recent { \(Game.fields) } added { \(Game.fields) } \
-        topRated { \(Game.fields) } favourites { \(Game.fields) } } collections { id name games { \(Game.fields) } } }
-        """
-    static let search = "query Search($text: String!) { search(text: $text) { \(Game.fields) } }"
-    static let patches = "query Patches($id: Int!) { game(id: $id) { patches { id name isDefault } } }"
-    static let setPatch = "mutation SetPatch($gameId: Int!, $patchId: Int) { setPatch(gameId: $gameId, patchId: $patchId) }"
-    static let decoration = "query GameDecoration($id: Int!) { game(id: $id) { decoration { \(GameDecoration.fields) } } }"
-    static let collectionChoices = "query CollectionChoices($id: Int!) { collections { id name } game(id: $id) { collectionIds } }"
-    static let setFavourite = """
-        mutation SetFavourite($gameId: Int!, $favourite: Boolean!) { setFavourite(gameId: $gameId, favourite: $favourite) }
-        """
-    static let createCollection = "mutation CreateCollection($name: String!) { createCollection(name: $name) { id name } }"
-    static let setInCollection = """
-        mutation SetInCollection($collectionId: Int!, $gameId: Int!, $member: Boolean!) { \
-        setInCollection(collectionId: $collectionId, gameId: $gameId, member: $member) }
-        """
-    static let saves = "query Saves($id: Int!) { game(id: $id) { saves { \(SaveSlot.fields) } } }"
-    static let cheats = "query Cheats($id: Int!) { game(id: $id) { cheats { \(Cheat.fields) } } }"
-    static let addCheat = """
-        mutation AddCheat($gameId: Int!, $code: String!, $description: String!) { \
-        addCheat(gameId: $gameId, code: $code, description: $description) { \(Cheat.fields) } }
-        """
-    static let setCheatEnabled = """
-        mutation SetCheatEnabled($gameId: Int!, $cheatId: Int!, $enabled: Boolean!) { \
-        setCheatEnabled(gameId: $gameId, cheatId: $cheatId, enabled: $enabled) { \(Cheat.fields) } }
-        """
-    static let deleteCheat = "mutation DeleteCheat($gameId: Int!, $cheatId: Int!) { deleteCheat(gameId: $gameId, cheatId: $cheatId) }"
-    static let sessionOffer = """
-        mutation SessionOffer($id: ID!, $sdp: String!, $client: String) { \
-        sessionOffer(id: $id, sdp: $sdp, client: $client) }
-        """
-    static let stopSession = "mutation StopSession($id: ID!) { stopSession(id: $id) }"
-    static let nameDevice = "mutation NameDevice($name: String!) { nameDevice(name: $name) }"
-    static let reportClientEvents = """
-        mutation ReportClientEvents($client: String!, $events: [ClientEventInput!]!) { \
-        reportClientEvents(client: $client, events: $events) }
-        """
-    static let setDisc = "mutation SetDisc($sessionId: ID!, $disc: Int!) { setDisc(sessionId: $sessionId, disc: $disc) }"
-    static let saveState = "mutation SaveState($sessionId: ID!, $slot: Int!) { saveState(sessionId: $sessionId, slot: $slot) }"
-    static let loadState = "mutation LoadState($sessionId: ID!, $slot: Int!) { loadState(sessionId: $sessionId, slot: $slot) }"
-    static let controllerMappings = """
-        query ControllerMappings($system: ID) { controllerMappings(system: $system) { \(ControllerMapping.fields) } }
-        """
-    static let saveControllerMapping = """
-        mutation SaveControllerMapping($controller: String!, $system: ID, $name: String!, $bindings: [BindingInput!]!) { \
-        saveControllerMapping(controller: $controller, system: $system, name: $name, bindings: $bindings) { \(ControllerMapping.fields) } }
-        """
-    static let resetControllerMapping = """
-        mutation ResetControllerMapping($controller: String!, $system: ID) { \
-        resetControllerMapping(controller: $controller, system: $system) }
-        """
-    static let controls = """
-        query Controls($system: ID!) { system(id: $system) { controls { buttons { button label } \
-        sticks { stick label key } layout { \(PadLayout.fields) } } } controllerLayouts { \(PadLayout.fields) } }
-        """
-}
-
 // MARK: - Client
 
-/// Calls to the SovEmu GraphQL API. Each request carries `Authorization: Bearer` with an access
-/// token from `auth` (none when signed out); an `UNAUTHENTICATED` answer refreshes the token and
-/// retries once. No cookies are sent or kept.
+/// Calls to the SovEmu GraphQL API, through Apollo. Each request carries `Authorization: Bearer`
+/// with an access token from `auth` (none when signed out); an `UNAUTHENTICATED` answer refreshes
+/// the token and retries once (`BearerInterceptor`). No cookies are sent or kept.
+///
+/// Every failure is an `APIError` (a GraphQL error with its `extensions.code`, or an HTTP one with
+/// its status), except a request that never reached the server (`URLError`) and cancellation.
 public final class SovEmuAPI: Sendable {
     public let baseURL: URL
     /// Signs in and out and keeps the access token; nil for an API that is never signed in.
     public let auth: TokenClient?
-    private let session: URLSession
+    /// Sends the access token.
+    private let client: ApolloClient
+    /// Sends none: `bootstrapConfig` is asked before the client knows where to sign in.
+    private let anonymous: ApolloClient
 
     public init(baseURL: URL, auth: TokenClient? = nil, session: URLSession = SovEmuAPI.makeSession()) {
         self.baseURL = baseURL
         self.auth = auth
-        self.session = session
+        client = GraphQLClient.make(baseURL: baseURL, auth: auth, session: session)
+        anonymous = GraphQLClient.make(baseURL: baseURL, auth: nil, session: session)
     }
 
     /// A session that neither sends nor stores cookies: the API authenticates with tokens.
@@ -573,213 +420,155 @@ public final class SovEmuAPI: Sendable {
     /// Revokes the sign-in and forgets the tokens (also when the server cannot be reached).
     public func signOut() async { await auth?.signOut() }
 
-    /// The request for one GraphQL operation.
-    static func request(baseURL: URL, query: String, variables: [String: GraphQLValue]) throws -> URLRequest {
-        var request = URLRequest(url: baseURL.appending(path: "graphql"))
-        request.httpMethod = "POST"
-        request.timeoutInterval = 30
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.httpShouldHandleCookies = false
-        request.httpBody = try JSONEncoder().encode(GraphQLRequest(query: query, variables: variables))
-        return request
+    // MARK: Sending
+
+    /// Runs one query and returns its data, or throws its first error.
+    private func fetch<Query: GraphQLQuery>(_ query: Query, signedIn: Bool = true) async throws -> Query.Data
+    where Query.ResponseFormat == SingleResponseFormat {
+        let client = signedIn ? client : anonymous
+        return try await Self.answer { try await client.fetch(query: query, cachePolicy: .networkOnly) }
     }
 
-    /// Decodes an answer's `data.<field>`, or throws its first error.
-    static func decode<T: Decodable>(_ type: T.Type, field: String, from data: Data, status: Int) throws -> T {
-        guard let response = try? JSONDecoder().decode(GraphQLResponse<[String: T]>.self, from: data) else {
-            if !(200..<300).contains(status) {
-                throw APIError(status: status, message: HTTPURLResponse.localizedString(forStatusCode: status))
-            }
-            // Well-formed errors but data that does not fit `T` (it is null when a field failed).
-            if let failure = try? JSONDecoder().decode(GraphQLResponse<JSONNull>.self, from: data).errors?.first {
-                throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
-            }
-            throw APIError(status: status, message: "The server's answer could not be read.")
-        }
-        if let failure = response.errors?.first {
-            throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
-        }
-        guard let value = response.data?[field] else {
-            throw APIError(status: status, message: "The server's answer had no \(field).")
-        }
-        return value
+    /// Runs one mutation and returns its data, or throws its first error.
+    private func perform<Mutation: GraphQLMutation>(_ mutation: Mutation) async throws -> Mutation.Data
+    where Mutation.ResponseFormat == SingleResponseFormat {
+        try await Self.answer { try await client.perform(mutation: mutation) }
     }
 
-    /// Decodes an answer's whole `data`, or throws its first error.
-    static func decodeData<T: Decodable>(_ type: T.Type, from data: Data, status: Int) throws -> T {
-        let response: GraphQLResponse<T>
+    /// Folds what can go wrong with one operation into `APIError`: an HTTP failure, an answer that
+    /// does not fit the schema, a GraphQL error, no data. A request that never reached the server
+    /// (`URLError`), a sign-in failure other than a refusal, and cancellation pass through.
+    static func answer<Operation: GraphQLOperation>(
+        _ send: () async throws -> GraphQLResponse<Operation>
+    ) async throws -> Operation.Data {
+        let response: GraphQLResponse<Operation>
         do {
-            response = try JSONDecoder().decode(GraphQLResponse<T>.self, from: data)
+            response = try await send()
+        } catch let error as ResponseCodeInterceptor.ResponseCodeError {
+            throw APIError(error)
+        } catch let error where error is APIError || error is URLError || error is AuthError
+            || error is CancellationError
+        {
+            throw error
         } catch {
-            if !(200..<300).contains(status) {
-                throw APIError(status: status, message: HTTPURLResponse.localizedString(forStatusCode: status))
-            }
-            if let failure = try? JSONDecoder().decode(GraphQLResponse<JSONNull>.self, from: data).errors?.first {
-                throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
-            }
-            throw APIError(status: status, message: "The server's answer could not be read.")
+            if Task.isCancelled { throw CancellationError() }
+            throw APIError(status: 200, message: "The server's answer could not be read.")
         }
-        if let failure = response.errors?.first {
-            throw APIError(status: status, code: failure.extensions?.code, message: failure.message)
-        }
-        guard let value = response.data else { throw APIError(status: status, message: "The server's answer had no data.") }
-        return value
+        if let first = response.errors?.first { throw APIError(first) }
+        guard let data = response.data else { throw APIError(status: 200, message: "The server's answer had no data.") }
+        return data
     }
 
-    /// Sends one operation with the access token and reads the answer. When the server says
-    /// `UNAUTHENTICATED` to a token, refreshes it and sends the operation once more.
-    private func send<T>(
-        _ query: String, _ variables: [String: GraphQLValue], authenticated: Bool = true, read: (Data, Int) throws -> T
-    ) async throws -> T {
-        var request = try Self.request(baseURL: baseURL, query: query, variables: variables)
-        let token = authenticated ? try await signedOutAsAPIError { try await self.auth?.accessToken() } : nil
-        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        let (data, status) = try await load(request)
-        do {
-            return try read(data, status)
-        } catch let error as APIError where error.isUnauthenticated {
-            guard let auth, let token else { throw error }
-            let fresh = try await signedOutAsAPIError { try await auth.refresh(replacing: token) }
-            request.setValue("Bearer \(fresh)", forHTTPHeaderField: "Authorization")
-            let (data, status) = try await load(request)
-            return try read(data, status)
-        }
-    }
-
-    private func load(_ request: URLRequest) async throws -> (Data, Int) {
-        let (data, response) = try await session.data(for: request)
-        return (data, (response as? HTTPURLResponse)?.statusCode ?? 0)
-    }
-
-    /// A refused refresh is the end of the sign-in: report it as `UNAUTHENTICATED`, as the
-    /// API would, so callers have one thing to check. Other failures (offline) pass through.
-    private func signedOutAsAPIError<T>(_ body: () async throws -> T) async throws -> T {
-        do {
-            return try await body()
-        } catch let error as AuthError where error.isInvalidGrant || error == .signedOut {
-            throw APIError(status: 401, code: "UNAUTHENTICATED", message: error.message ?? "Sign in again.")
-        }
-    }
-
-    /// Sends one operation and returns its root `field`.
-    private func post<T: Decodable>(
-        _ query: String, _ variables: [String: GraphQLValue] = [:], field: String, as type: T.Type = T.self
-    ) async throws -> T {
-        try await send(query, variables) { try Self.decode(T.self, field: field, from: $0, status: $1) }
-    }
+    // MARK: Operations
 
     /// How to sign in here (asked without a token, so it works before sign-in and before the
     /// client knows where to refresh). Hands the endpoints to `auth`.
     public func bootstrap() async throws -> BootstrapConfig {
-        let config: BootstrapConfig = try await send(Documents.bootstrapConfig, [:], authenticated: false) {
-            try Self.decode(BootstrapConfig.self, field: "bootstrapConfig", from: $0, status: $1)
-        }
+        let config = BootstrapConfig(try await fetch(SovEmuGraphQL.BootstrapQuery(), signedIn: false).bootstrapConfig)
         await auth?.setEndpoints(config.endpoints(relativeTo: baseURL))
         return config
     }
 
-    public func status() async throws -> AuthStatus { try await post(Documents.viewer, field: "viewer") }
-    public func config() async throws -> ClientConfig { try await post(Documents.clientConfig, field: "clientConfig") }
-    public func systems() async throws -> [SystemSummary] { try await post(Documents.systems, field: "systems") }
+    public func status() async throws -> AuthStatus {
+        AuthStatus(try await fetch(SovEmuGraphQL.ViewerQuery()).viewer)
+    }
+    public func config() async throws -> ClientConfig {
+        try ClientConfig(try await fetch(SovEmuGraphQL.ClientConfigQuery()).clientConfig)
+    }
+    public func systems() async throws -> [SystemSummary] {
+        try await fetch(SovEmuGraphQL.SystemsQuery()).systems.map { SystemSummary($0.fragments.systemFields) }
+    }
     public func games(system: String) async throws -> [Game] {
-        struct Games: Decodable { let games: [Game] }
-        let found: Games? = try await post(Documents.games, ["system": .string(system)], field: "system")
-        guard let found else { throw APIError(status: 200, code: "NOT_FOUND", message: "No such system.") }
-        return found.games
+        guard let found = try await fetch(SovEmuGraphQL.SystemGamesQuery(id: system)).system else {
+            throw APIError(status: 200, code: "NOT_FOUND", message: "No such system.")
+        }
+        return found.games.map { Game($0.fragments.gameFields) }
     }
     /// Starts a game, named `startId` so its progress can be followed (`startProgress`).
     public func startSession(gameId: Int64, startId: String? = nil) async throws -> SessionInfo {
-        try await post(Documents.startSession, ["gameId": .int(Int(gameId)), "startId": startId.map(GraphQLValue.string) ?? .null],
-                       field: "startSession")
+        let start = SovEmuGraphQL.StartSessionMutation(gameId: int32(gameId), startId: .orNull(startId))
+        let data = try await perform(start)
+        return SessionInfo(data.startSession.fragments.sessionFields)
     }
     /// How far the start named `startId` has got.
     public func startProgress(startId: String) async throws -> StartStatus {
-        try await post(Documents.startProgress, ["startId": .string(startId)], field: "startProgress")
+        StartStatus(try await fetch(SovEmuGraphQL.StartProgressQuery(startId: startId)).startProgress)
     }
 
     /// The home screen's rows, and a row per collection.
     public func home() async throws -> HomeFeed {
-        struct Answer: Decodable { let home: HomeRows; let collections: [HomeCollection] }
-        let answer = try await send(Documents.home, [:]) { try Self.decodeData(Answer.self, from: $0, status: $1) }
-        return HomeFeed(featured: answer.home.featured, recent: answer.home.recent, added: answer.home.added,
-                        topRated: answer.home.topRated, favourites: answer.home.favourites, collections: answer.collections)
+        HomeFeed(try await fetch(SovEmuGraphQL.HomeQuery()))
     }
     /// Games on every system matching `text` (the server's first 48).
     public func search(_ text: String) async throws -> [Game] {
-        try await post(Documents.search, ["text": .string(text)], field: "search")
+        try await fetch(SovEmuGraphQL.SearchQuery(text: text)).search.map { Game($0.fragments.gameFields) }
     }
 
-    /// One field of `game(id:)`.
-    private func gameField<T: Decodable>(_ document: String, _ id: Int64, _ field: String, as type: T.Type) async throws -> T {
-        let game: [String: T] = try await post(document, ["id": .int(Int(id))], field: "game")
-        guard let value = game[field] else { throw APIError(status: 200, message: "The server's answer had no \(field).") }
-        return value
+    /// A game, or `NOT_FOUND`.
+    private func game<T>(_ game: T?) throws -> T {
+        guard let game else { throw APIError(status: 200, code: "NOT_FOUND", message: "No such game.") }
+        return game
     }
 
     public func patches(gameId: Int64) async throws -> [GamePatch] {
-        try await gameField(Documents.patches, gameId, "patches", as: [GamePatch].self)
+        try game(try await fetch(SovEmuGraphQL.PatchesQuery(id: int32(gameId))).game)
+            .patches.map(GamePatch.init)
     }
     /// Plays a game with a patch (nil: the original) from now on.
     public func setPatch(gameId: Int64, patchId: Int?) async throws {
-        _ = try await post(Documents.setPatch, ["gameId": .int(Int(gameId)), "patchId": patchId.map(GraphQLValue.int) ?? .null],
-                           field: "setPatch", as: Bool.self)
+        _ = try await perform(
+            SovEmuGraphQL.SetPatchMutation(gameId: int32(gameId), patchId: .orNull(patchId.map { int32($0) })))
     }
     /// The artwork to frame a game's picture with; nil when there is none.
     public func decoration(gameId: Int64) async throws -> GameDecoration? {
-        try await gameField(Documents.decoration, gameId, "decoration", as: GameDecoration?.self)
+        try game(try await fetch(SovEmuGraphQL.GameDecorationQuery(id: int32(gameId))).game)
+            .decoration.map(GameDecoration.init)
     }
     /// This user's saves of a game.
     public func saves(gameId: Int64) async throws -> [SaveSlot] {
-        try await gameField(Documents.saves, gameId, "saves", as: [SaveSlot].self)
+        try game(try await fetch(SovEmuGraphQL.SavesQuery(id: int32(gameId))).game)
+            .saves.map { SaveSlot($0.fragments.saveFields) }
     }
 
     public func setFavourite(gameId: Int64, favourite: Bool) async throws {
-        _ = try await post(Documents.setFavourite, ["gameId": .int(Int(gameId)), "favourite": .bool(favourite)],
-                           field: "setFavourite", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.SetFavouriteMutation(gameId: int32(gameId), favourite: favourite))
     }
     /// This user's collections, each saying whether the game is in it, by name.
     public func collectionChoices(gameId: Int64) async throws -> [CollectionChoice] {
-        struct Named: Decodable { let id: Int; let name: String }
-        struct Member: Decodable { let collectionIds: [Int] }
-        struct Answer: Decodable { let collections: [Named]; let game: Member }
-        let answer = try await send(Documents.collectionChoices, ["id": .int(Int(gameId))]) {
-            try Self.decodeData(Answer.self, from: $0, status: $1)
-        }
-        let member = Set(answer.game.collectionIds)
-        return answer.collections.map { CollectionChoice(id: $0.id, name: $0.name, member: member.contains($0.id)) }
+        let data = try await fetch(SovEmuGraphQL.CollectionChoicesQuery(id: int32(gameId)))
+        let member = Set(try game(data.game).collectionIds)
+        return data.collections.map { CollectionChoice(id: $0.id, name: $0.name, member: member.contains($0.id)) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     /// Makes a collection (its name trimmed to 64 characters); returns its id.
     public func createCollection(name: String) async throws -> Int {
-        struct Created: Decodable { let id: Int }
         let trimmed = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(64))
-        let created: Created = try await post(Documents.createCollection, ["name": .string(trimmed)], field: "createCollection")
-        return created.id
+        return try await perform(SovEmuGraphQL.CreateCollectionMutation(name: trimmed)).createCollection.id
     }
     public func setInCollection(collectionId: Int, gameId: Int64, member: Bool) async throws {
-        _ = try await post(Documents.setInCollection,
-                           ["collectionId": .int(collectionId), "gameId": .int(Int(gameId)), "member": .bool(member)],
-                           field: "setInCollection", as: Bool.self)
+        let set = SovEmuGraphQL.SetInCollectionMutation(
+            collectionId: int32(collectionId), gameId: int32(gameId), member: member)
+        _ = try await perform(set)
     }
 
     /// This user's cheats for a game.
     public func cheats(gameId: Int64) async throws -> [Cheat] {
-        try await gameField(Documents.cheats, gameId, "cheats", as: [Cheat].self)
+        try game(try await fetch(SovEmuGraphQL.CheatsQuery(id: int32(gameId))).game)
+            .cheats.map { Cheat($0.fragments.cheatFields) }
     }
     /// Adds a cheat; returns the game's cheats after it.
     public func addCheat(gameId: Int64, code: String, description: String) async throws -> [Cheat] {
-        try await post(Documents.addCheat, ["gameId": .int(Int(gameId)), "code": .string(code), "description": .string(description)],
-                       field: "addCheat")
+        try await perform(SovEmuGraphQL.AddCheatMutation(gameId: int32(gameId), code: code, description: description))
+            .addCheat.map { Cheat($0.fragments.cheatFields) }
     }
     /// Turns a cheat on or off (a running session applies it at once); returns the game's cheats.
     public func setCheatEnabled(gameId: Int64, cheatId: Int, enabled: Bool) async throws -> [Cheat] {
-        try await post(Documents.setCheatEnabled, ["gameId": .int(Int(gameId)), "cheatId": .int(cheatId), "enabled": .bool(enabled)],
-                       field: "setCheatEnabled")
+        try await perform(
+            SovEmuGraphQL.SetCheatEnabledMutation(gameId: int32(gameId), cheatId: int32(cheatId), enabled: enabled))
+            .setCheatEnabled.map { Cheat($0.fragments.cheatFields) }
     }
     public func deleteCheat(gameId: Int64, cheatId: Int) async throws {
-        _ = try await post(Documents.deleteCheat, ["gameId": .int(Int(gameId)), "cheatId": .int(cheatId)],
-                           field: "deleteCheat", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.DeleteCheatMutation(gameId: int32(gameId), cheatId: int32(cheatId)))
     }
 
     /// A `/media/…` path the API handed out, as a full URL on this server (an absolute one as it is).
@@ -791,103 +580,83 @@ public final class SovEmuAPI: Sendable {
     /// Sends the complete WebRTC offer SDP, naming the client (`ios 0.1.0 (iPad, iPadOS 18.1)`,
     /// shown on the admin's sessions page); returns the worker's answer SDP.
     public func offer(sessionId: String, sdp: String, client: String? = nil) async throws -> String {
-        try await post(Documents.sessionOffer, Self.offerVariables(sessionId: sessionId, sdp: sdp, client: client),
-                       field: "sessionOffer")
+        try await perform(Self.offer(sessionId: sessionId, sdp: sdp, client: client)).sessionOffer
     }
 
-    static func offerVariables(sessionId: String, sdp: String, client: String?) -> [String: GraphQLValue] {
-        ["id": .string(sessionId), "sdp": .string(sdp), "client": client.map(GraphQLValue.string) ?? .null]
+    static func offer(sessionId: String, sdp: String, client: String?) -> SovEmuGraphQL.SessionOfferMutation {
+        SovEmuGraphQL.SessionOfferMutation(id: sessionId, sdp: sdp, client: .orNull(client))
     }
     /// Names this sign-in's device on the server ("SovEmu for iOS 0.1.0 · iPad"), for the
     /// admin's Devices page.
     public func nameDevice(_ name: String) async throws {
-        _ = try await post(Documents.nameDevice, ["name": .string(name)], field: "nameDevice", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.NameDeviceMutation(name: name))
     }
     public func stopSession(_ id: String) async throws {
-        _ = try await post(Documents.stopSession, ["id": .string(id)], field: "stopSession", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.StopSessionMutation(id: id))
     }
     /// Changes a multi-disc game's disc (from 1).
     public func setDisc(sessionId: String, disc: Int) async throws {
-        _ = try await post(Documents.setDisc, ["sessionId": .string(sessionId), "disc": .int(disc)], field: "setDisc", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.SetDiscMutation(sessionId: sessionId, disc: int32(disc)))
     }
 
     public func saveState(sessionId: String, slot: Int) async throws {
-        _ = try await post(Documents.saveState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "saveState", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.SaveStateMutation(sessionId: sessionId, slot: int32(slot)))
     }
     public func loadState(sessionId: String, slot: Int) async throws {
-        _ = try await post(Documents.loadState, ["sessionId": .string(sessionId), "slot": .int(slot)], field: "loadState", as: Bool.self)
+        _ = try await perform(SovEmuGraphQL.LoadStateMutation(sessionId: sessionId, slot: int32(slot)))
     }
 
-    /// The mappings in force for this user on a system (nil: on every system), one per model:
-    /// their own for the system, their own for every system, the default for the system, the
-    /// default for every system. A model missing from the list uses the built-in defaults.
     /// Sends what went wrong on this device to the server's log (`client event`); returns how
     /// many it logged. Callers drop a failure: a report must not get in the player's way.
     @discardableResult
     public func reportClientEvents(client: String, events: [ClientEvent]) async throws -> Int {
         guard isSignedIn, !events.isEmpty else { return 0 }
-        return try await post(Documents.reportClientEvents, Self.eventVariables(client: client, events: events),
-                              field: "reportClientEvents")
+        return try await perform(Self.report(client: client, events: events)).reportClientEvents
     }
 
-    static func eventVariables(client: String, events: [ClientEvent]) -> [String: GraphQLValue] {
-        let list = events.map { e -> GraphQLValue in
-            .object([
-                "kind": .string(e.kind.rawValue),
-                "message": .string(e.message),
-                "sessionId": e.sessionId.map(GraphQLValue.string) ?? .null,
-                "at": .double(e.at),
-            ])
-        }
-        return ["client": .string(client), "events": .list(list)]
+    static func report(client: String, events: [ClientEvent]) -> SovEmuGraphQL.ReportClientEventsMutation {
+        SovEmuGraphQL.ReportClientEventsMutation(client: client, events: events.map {
+            SovEmuGraphQL.ClientEventInput(
+                kind: .init(rawValue: $0.kind.rawValue), message: $0.message, sessionId: .orNull($0.sessionId),
+                at: .some($0.at))
+        })
     }
 
+    /// The mappings in force for this user on a system (nil: on every system), one per model:
+    /// their own for the system, their own for every system, the default for the system, the
+    /// default for every system. A model missing from the list uses the built-in defaults.
     public func controllerMappings(system: String?) async throws -> [ControllerMapping] {
-        try await post(Documents.controllerMappings, ["system": Self.system(system)], field: "controllerMappings")
+        try await fetch(SovEmuGraphQL.ControllerMappingsQuery(system: .orNull(system)))
+            .controllerMappings.map { ControllerMapping($0.fragments.mappingFields) }
     }
     /// Saves a controller model's mapping for a system (nil: every system).
     @discardableResult
     public func saveControllerMapping(controller: String, system: String?, name: String, bindings: [ControllerBinding]) async throws
         -> ControllerMapping
     {
-        try await post(
-            Documents.saveControllerMapping,
-            Self.mappingVariables(controller: controller, system: system, name: name, bindings: bindings),
-            field: "saveControllerMapping")
+        let save = Self.saveMapping(controller: controller, system: system, name: name, bindings: bindings)
+        let data = try await perform(save)
+        return ControllerMapping(data.saveControllerMapping.fragments.mappingFields)
+    }
+
+    static func saveMapping(controller: String, system: String?, name: String, bindings: [ControllerBinding])
+        -> SovEmuGraphQL.SaveControllerMappingMutation
+    {
+        SovEmuGraphQL.SaveControllerMappingMutation(
+            controller: controller, system: .orNull(system), name: name,
+            bindings: bindings.map { SovEmuGraphQL.BindingInput(input: $0.input, button: .init(rawValue: $0.button)) })
     }
     /// Removes the user's own mapping for a model on a system (nil: every system); returns
     /// whether it had one. What then applies comes from `controllerMappings` again.
     @discardableResult
     public func resetControllerMapping(controller: String, system: String?) async throws -> Bool {
-        try await post(Documents.resetControllerMapping, Self.resetVariables(controller: controller, system: system),
-                       field: "resetControllerMapping")
+        try await perform(SovEmuGraphQL.ResetControllerMappingMutation(controller: controller, system: .orNull(system)))
+            .resetControllerMapping
     }
     /// A system's buttons and pad, and the controllers' diagrams.
     public func controls(system: String) async throws -> ControlsInfo {
-        try await send(Documents.controls, ["system": .string(system)]) { try Self.decodeData(ControlsInfo.self, from: $0, status: $1) }
+        ControlsInfo(try await fetch(SovEmuGraphQL.ControlsQuery(id: system)))
     }
-
-    static func system(_ system: String?) -> GraphQLValue { system.map(GraphQLValue.string) ?? .null }
-
-    static func mappingVariables(controller: String, system: String?, name: String, bindings: [ControllerBinding])
-        -> [String: GraphQLValue]
-    {
-        [
-            "controller": .string(controller),
-            "system": Self.system(system),
-            "name": .string(name),
-            "bindings": .list(bindings.map { .object(["input": .string($0.input), "button": .string($0.button)]) }),
-        ]
-    }
-
-    static func resetVariables(controller: String, system: String?) -> [String: GraphQLValue] {
-        ["controller": .string(controller), "system": Self.system(system)]
-    }
-}
-
-/// Decodes anything, for reading `errors` when `data` has an unexpected shape.
-struct JSONNull: Decodable {
-    init(from decoder: Decoder) throws {}
 }
 
 /// The mapping calls `Mappings` needs (`SovEmuAPI`, or a stand-in in tests).
@@ -899,3 +668,7 @@ public protocol ControllerMappingService: Sendable {
 }
 
 extension SovEmuAPI: ControllerMappingService {}
+
+/// A number as a GraphQL `Int` argument, which is 32-bit (Apollo types it `Int32`). An id out
+/// of its range names nothing, and the server says so (`NOT_FOUND`), rather than the app trapping.
+func int32(_ value: some BinaryInteger) -> Int32 { Int32(clamping: value) }

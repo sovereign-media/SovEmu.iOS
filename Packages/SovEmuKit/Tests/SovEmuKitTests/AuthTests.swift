@@ -96,7 +96,8 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         struct Loading: @unchecked Sendable { let request: URLProtocol, client: (any URLProtocolClient)? }
         let loading = Loading(request: self, client: client)
         Task {
-            let (status, text) = await handler(seen, body)
+            let (status, answer) = await handler(seen, body)
+            let text = url.path() == "/graphql" ? Typenames.add(answer) : answer
             let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
             loading.client?.urlProtocol(loading.request, didReceive: response, cacheStoragePolicy: .notAllowed)
             loading.client?.urlProtocol(loading.request, didLoad: Data(text.utf8))
@@ -347,8 +348,13 @@ struct AuthTests {
 /// `bootstrapConfig`: the anonymous query the app asks first, whose answer names the client id
 /// and every sign-in URL (the app hard-codes no path but `/graphql`).
 struct BootstrapTests {
+    /// The server's answer: every field the query selects, null where `config` names none.
     static func reply(_ config: [String: Any?]) -> (Int, String) {
-        let fields = config.mapValues { $0 ?? NSNull() }
+        let selected = [
+            "signInAvailable", "address", "issuer", "webClientId", "nativeClientId", "authorizationEndpoint", "tokenEndpoint",
+            "revocationEndpoint", "deviceAuthorizationEndpoint", "verificationUri", "passwordEndpoint",
+        ]
+        let fields = Dictionary(uniqueKeysWithValues: selected.map { ($0, (config[$0] ?? nil) ?? NSNull()) })
         return (200, Stub.json(["data": ["bootstrapConfig": fields]]))
     }
 
@@ -428,11 +434,11 @@ struct BootstrapTests {
         #expect(store.load() == "r1" && stub.requests.isEmpty)
     }
 
-    @Test func asksForEveryField() throws {
+    @Test func asksForEveryEndpointItSignsInWith() throws {
+        let document = SovEmuGraphQL.BootstrapQuery.operationDocument.definition?.queryDocument ?? ""
         for field in ["signInAvailable", "address", "nativeClientId", "tokenEndpoint", "revocationEndpoint", "passwordEndpoint"] {
-            #expect(Documents.bootstrapConfig.contains(field))
+            #expect(document.contains(field), "\(field)")
         }
-        #expect(Documents.bootstrapConfig.hasPrefix("query BootstrapConfig { bootstrapConfig {"))
         // A persisted answer reads back the same.
         let config = BootstrapConfig(signInAvailable: true, address: "a", nativeClientId: "n", tokenEndpoint: "http://a/t", passwordEndpoint: "http://a/p")
         #expect(try JSONDecoder().decode(BootstrapConfig.self, from: JSONEncoder().encode(config)) == config)
