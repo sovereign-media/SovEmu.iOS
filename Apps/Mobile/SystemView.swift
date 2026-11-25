@@ -286,7 +286,11 @@ struct GamePanel: View {
                 art
                 VStack(alignment: .leading, spacing: 16) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(game.title).font(.system(size: 24, weight: .black)).foregroundStyle(.white)
+                        HStack(alignment: .top, spacing: 12) {
+                            Text(game.title).font(.system(size: 24, weight: .black)).foregroundStyle(.white)
+                            Spacer(minLength: 0)
+                            if let esrb = game.esrb { EsrbBadge(rating: esrb, height: 56) }
+                        }
                         if let release = game.release {
                             Text(release).font(.system(size: 14, weight: .medium)).foregroundStyle(Sov.amber200)
                         }
@@ -301,6 +305,10 @@ struct GamePanel: View {
                                 Fact(symbol: "person.2", text: most == 1 ? "1 player" : "\(game.players ?? "") players")
                             }
                             if game.discs > 1 { Fact(symbol: partSymbol(game.partKind), text: "\(game.discs) discs") }
+                            if let stars = formatRating(game.rating) { Fact(symbol: "star", text: stars) }
+                            if !game.modes.isEmpty { Fact(symbol: "gamecontroller", text: game.modes.joined(separator: ", ")) }
+                            if !game.series.isEmpty { Fact(symbol: "books.vertical", text: game.series.joined(separator: ", ")) }
+                            if !game.themes.isEmpty { Fact(symbol: "theatermasks", text: game.themes.joined(separator: ", ")) }
                         }
                         .padding(.top, 8)
                     }

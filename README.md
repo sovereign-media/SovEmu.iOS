@@ -36,13 +36,14 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
 **Browsing:**
 - **Home:** a hero of featured games (moving on every 9 s; swipe to change), then rows: Continue
   playing (where you left off, from the auto save's picture), Favourites, Systems, Recently
-  added, and one per collection. A card opens the game's panel on its system's page; the hero's
+  added, Top rated, and one per collection. A card opens the game's panel on its system's page; the hero's
   Play starts at once (asking Continue or Start over when there is an auto save).
 - **A system's page:** the covers in a grid, sorted by title (natural order: Mega Man 2 before
   10), recently played, release year or most played (remembered); Filters searches titles, makers
   and genres and keeps favourites, played or not, two players or more, and genres; Jump goes to a
   letter. A game's panel (beside the grid on an iPad, a sheet on an iPhone) shows its artwork and
-  video snap, facts and description, Continue / Start over or Play, starting from any save by its
+  video snap, its age-rating badge (SovEmu's own, after the ESRB's rating), facts (rating out
+  of 5, ways to play, series, themes) and description, Continue / Start over or Play, starting from any save by its
   picture, the favourite, its collections, and its soft patch (one button steps through the
   original and each patch).
 - **Search** looks across every system.

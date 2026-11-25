@@ -466,7 +466,7 @@ enum Documents {
         """
     static let home = """
         query Home { home { featured { \(Game.fields) } recent { \(Game.fields) } added { \(Game.fields) } \
-        favourites { \(Game.fields) } } collections { id name games { \(Game.fields) } } }
+        topRated { \(Game.fields) } favourites { \(Game.fields) } } collections { id name games { \(Game.fields) } } }
         """
     static let search = "query Search($text: String!) { search(text: $text) { \(Game.fields) } }"
     static let patches = "query Patches($id: Int!) { game(id: $id) { patches { id name isDefault } } }"
@@ -700,11 +700,10 @@ public final class SovEmuAPI: Sendable {
 
     /// The home screen's rows, and a row per collection.
     public func home() async throws -> HomeFeed {
-        struct Rows: Decodable { let featured, recent, added, favourites: [Game] }
-        struct Answer: Decodable { let home: Rows; let collections: [HomeCollection] }
+        struct Answer: Decodable { let home: HomeRows; let collections: [HomeCollection] }
         let answer = try await send(Documents.home, [:]) { try Self.decodeData(Answer.self, from: $0, status: $1) }
         return HomeFeed(featured: answer.home.featured, recent: answer.home.recent, added: answer.home.added,
-                        favourites: answer.home.favourites, collections: answer.collections)
+                        topRated: answer.home.topRated, favourites: answer.home.favourites, collections: answer.collections)
     }
     /// Games on every system matching `text` (the server's first 48).
     public func search(_ text: String) async throws -> [Game] {

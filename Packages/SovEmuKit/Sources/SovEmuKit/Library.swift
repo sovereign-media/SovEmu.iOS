@@ -63,6 +63,16 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
     public let players: String?
     /// 0 to 1.
     public let rating: Double?
+    /// The ESRB's age rating; nil when unknown, or one a newer server adds.
+    public let esrb: EsrbRating?
+    /// Ways to play: "Single player", "Multiplayer (simultaneous)" …
+    public let modes: [String]
+    /// The series and families it belongs to: "Castlevania" …
+    public let series: [String]
+    /// Its themes: "Horror", "Fantasy" …
+    public let themes: [String]
+    /// Its genres, as `genre` lists them.
+    public let genres: [String]
     /// How many files it has (discs, disks, tapes…); 1 for most.
     public let discs: Int
     public let partKind: PartKind?
@@ -79,8 +89,10 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         video: String? = nil, description: String? = nil, releaseDate: String? = nil, developer: String? = nil,
         publisher: String? = nil, genre: String? = nil, players: String? = nil, rating: Double? = nil, discs: Int = 1,
         partKind: PartKind? = nil, favourite: Bool = false, release: String? = nil, patch: String? = nil,
-        autoSave: SaveSlot? = nil, imageSmall: String? = nil, cover: String? = nil
+        autoSave: SaveSlot? = nil, imageSmall: String? = nil, cover: String? = nil, esrb: EsrbRating? = nil,
+        modes: [String] = [], series: [String] = [], themes: [String] = [], genres: [String] = []
     ) {
+        (self.esrb, self.modes, self.series, self.themes, self.genres) = (esrb, modes, series, themes, genres)
         (self.imageSmall, self.cover) = (imageSmall, cover)
         (self.id, self.system, self.title, self.fileTitle, self.tags, self.path) = (id, system, title, fileTitle, tags, path)
         (self.size, self.lastPlayedAt, self.playCount) = (size, lastPlayedAt, playCount)
@@ -94,14 +106,15 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         id system title fileTitle tags path size lastPlayedAt playCount \
         image: mediaUrl(kind: IMAGE, width: 1600) imageSmall: mediaUrl(kind: IMAGE, width: 480) \
         cover: mediaUrl(kind: THUMB, width: 800) thumb: mediaUrl(kind: THUMB, width: 400) video: mediaUrl(kind: VIDEO) \
-        description releaseDate developer publisher genre players rating discs partKind favourite release patch \
-        autoSave { \(SaveSlot.fields) }
+        description releaseDate developer publisher genre players rating esrb modes series themes genres \
+        discs partKind favourite release patch autoSave { \(SaveSlot.fields) }
         """
 
     enum CodingKeys: String, CodingKey {
         case id, system, title, fileTitle, tags, path, size, lastPlayedAt, playCount, image, imageSmall, cover, thumb, video
         case description
         case releaseDate, developer, publisher, genre, players, rating, discs, partKind, favourite, release, patch, autoSave
+        case esrb, modes, series, themes, genres
     }
 
     public init(from decoder: Decoder) throws {
@@ -134,6 +147,12 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         release = try c.decodeIfPresent(String.self, forKey: .release)
         patch = try c.decodeIfPresent(String.self, forKey: .patch)
         autoSave = try c.decodeIfPresent(SaveSlot.self, forKey: .autoSave)
+        // A rating a newer server adds is no rating, rather than a game that fails to decode.
+        esrb = try c.decodeIfPresent(String.self, forKey: .esrb).flatMap(EsrbRating.init(rawValue:))
+        modes = try c.decodeIfPresent([String].self, forKey: .modes) ?? []
+        series = try c.decodeIfPresent([String].self, forKey: .series) ?? []
+        themes = try c.decodeIfPresent([String].self, forKey: .themes) ?? []
+        genres = try c.decodeIfPresent([String].self, forKey: .genres) ?? []
     }
 
     /// "1996", from the release date.
@@ -150,18 +169,36 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
 }
 
 /// `Query.home` and this user's collections: the hero's games, recently played (with their
-/// auto saves), recently added, favourites, and a row per collection.
+/// auto saves), recently added, the best rated, favourites, and a row per collection.
 public struct HomeFeed: Sendable, Equatable {
     public var featured: [Game]
     public var recent: [Game]
     public var added: [Game]
+    /// The library's best rated games, best first.
+    public var topRated: [Game]
     public var favourites: [Game]
     public var collections: [HomeCollection]
 
-    public init(featured: [Game] = [], recent: [Game] = [], added: [Game] = [], favourites: [Game] = [],
-                collections: [HomeCollection] = []) {
-        (self.featured, self.recent, self.added, self.favourites, self.collections) =
-            (featured, recent, added, favourites, collections)
+    public init(featured: [Game] = [], recent: [Game] = [], added: [Game] = [], topRated: [Game] = [],
+                favourites: [Game] = [], collections: [HomeCollection] = []) {
+        (self.featured, self.recent, self.added, self.topRated, self.favourites, self.collections) =
+            (featured, recent, added, topRated, favourites, collections)
+    }
+}
+
+/// `Query.home`'s rows as the server sends them; `topRated` is empty from an older server.
+struct HomeRows: Decodable {
+    let featured, recent, added, topRated, favourites: [Game]
+
+    enum CodingKeys: String, CodingKey { case featured, recent, added, topRated, favourites }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        featured = try c.decode([Game].self, forKey: .featured)
+        recent = try c.decode([Game].self, forKey: .recent)
+        added = try c.decode([Game].self, forKey: .added)
+        topRated = try c.decodeIfPresent([Game].self, forKey: .topRated) ?? []
+        favourites = try c.decode([Game].self, forKey: .favourites)
     }
 }
 
