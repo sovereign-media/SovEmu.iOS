@@ -221,6 +221,14 @@ struct AccountView: View {
                 Text("The screensaver plays games' videos after a while without a touch or a button press, and keeps the screen awake in the menus until then. Music follows the silent switch.")
             }
             Section {
+                // A TV signs itself in with a code; this approves one from here.
+                NavigationLink {
+                    SignInTVView()
+                } label: {
+                    Label(TvSignIn.title, systemImage: "tv")
+                }
+            }
+            Section {
                 Button(role: .destructive) {
                     Task { await model.signOut() }
                 } label: {

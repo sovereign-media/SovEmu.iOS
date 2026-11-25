@@ -10,6 +10,8 @@ struct PairingView: View {
     let api: SovEmuAPI
     let onSignedIn: () -> Void
     let onUsePassword: (() -> Void)?
+    /// What the way back says: the password, or every other way when there is a browser too.
+    var backLabel = PairingText.usePassword
 
     private enum Phase: Equatable {
         case asking
@@ -54,7 +56,7 @@ struct PairingView: View {
                     .buttonStyle(.borderedProminent).frame(maxWidth: .infinity)
             }
             if let onUsePassword {
-                Button(PairingText.usePassword, action: onUsePassword)
+                Button(backLabel, action: onUsePassword)
                     .buttonStyle(.bordered).frame(maxWidth: .infinity)
             }
         }

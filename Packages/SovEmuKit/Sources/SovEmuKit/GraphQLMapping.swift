@@ -32,7 +32,8 @@ extension BootstrapConfig {
             signInAvailable: c.signInAvailable, address: c.address, issuer: c.issuer, webClientId: c.webClientId,
             deviceClientId: c.deviceClientId, authorizationEndpoint: c.authorizationEndpoint,
             tokenEndpoint: c.tokenEndpoint, revocationEndpoint: c.revocationEndpoint, deviceAuthorizationEndpoint: c.deviceAuthorizationEndpoint,
-            verificationUri: c.verificationUri, passwordEndpoint: c.passwordEndpoint)
+            verificationUri: c.verificationUri, passwordEndpoint: c.passwordEndpoint,
+            mobileClientId: c.mobileClientId, mobileRedirectUri: c.mobileRedirectUri)
     }
 }
 

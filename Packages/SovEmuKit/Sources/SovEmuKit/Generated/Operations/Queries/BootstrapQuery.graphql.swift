@@ -9,7 +9,7 @@ extension SovEmuGraphQL {
     static let operationName: String = "Bootstrap"
     static let operationDocument: ApolloAPI.OperationDocument = .init(
       definition: .init(
-        #"query Bootstrap { bootstrapConfig { __typename signInAvailable address issuer webClientId deviceClientId authorizationEndpoint tokenEndpoint revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint } }"#
+        #"query Bootstrap { bootstrapConfig { __typename signInAvailable address issuer webClientId deviceClientId authorizationEndpoint tokenEndpoint revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint mobileClientId mobileRedirectUri } }"#
       ))
 
     public init() {}
@@ -51,6 +51,8 @@ extension SovEmuGraphQL {
           .field("deviceAuthorizationEndpoint", String?.self),
           .field("verificationUri", String?.self),
           .field("passwordEndpoint", String?.self),
+          .field("mobileClientId", String?.self),
+          .field("mobileRedirectUri", String?.self),
         ] }
         static var __fulfilledFragments: [any ApolloAPI.SelectionSet.Type] { [
           BootstrapQuery.Data.BootstrapConfig.self
@@ -80,6 +82,11 @@ extension SovEmuGraphQL {
         /// The apps' password fallback: a form post of `client_id`, `username`, `password` and
         /// `scope`, answered like the token endpoint. Null when `SovEmu__Authentication__PasswordSignIn` is off.
         var passwordEndpoint: String? { __data["passwordEndpoint"] }
+        /// The phone and tablet apps' id for signing in through the system browser: the
+        /// authorization code flow with PKCE, back to `mobileRedirectUri`.
+        var mobileClientId: String? { __data["mobileClientId"] }
+        /// Where the mobile client's sign-in comes back to, the apps' own scheme.
+        var mobileRedirectUri: String? { __data["mobileRedirectUri"] }
       }
     }
   }

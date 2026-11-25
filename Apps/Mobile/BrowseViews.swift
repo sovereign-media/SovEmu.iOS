@@ -1,12 +1,18 @@
+import AuthenticationServices
 import SwiftUI
 import SovEmuKit
 
 private let surface = Sov.surface
 private let panel = Sov.panel
 
-/// Server address and sign-in. First-run setup happens in the web client.
+/// Server address and sign-in. As Sovereign's phones: *Sign in* opens the server's own sign-in
+/// page in the system browser (the code flow with PKCE, as the mobile client); a code to approve
+/// elsewhere and the password are the other ways in. First-run setup happens in the web client.
 struct ConnectView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.webAuthenticationSession) private var webAuthenticationSession
+    /// The password form, asked for instead of the browser.
+    @State private var passwordAsked = false
     @State private var server = ""
     @State private var username = ""
     @State private var password = ""
@@ -29,6 +35,7 @@ struct ConnectView: View {
                         if address != model.serverURL {
                             connected = nil
                             pairingAsked = false
+                            passwordAsked = false
                         }
                     }
                 if let connected, let problem = connected.signInProblem {
@@ -37,23 +44,43 @@ struct ConnectView: View {
                     Button(busy ? "Connecting…" : "Try again") { Task { await connect() } }
                         .buttonStyle(.bordered).disabled(busy).frame(maxWidth: .infinity)
                 } else if let connected, let api = model.api,
-                          connected.canPair && (pairingAsked || !connected.canUsePassword) {
+                          connected.canPair && (pairingAsked || !(connected.canUsePassword || connected.canUseBrowser)) {
                     PairingView(
                         api: api,
                         onSignedIn: { model.signedInAnew() },
-                        onUsePassword: connected.canUsePassword ? { pairingAsked = false } : nil)
+                        onUsePassword: connected.canUsePassword || connected.canUseBrowser ? { pairingAsked = false } : nil,
+                        backLabel: connected.canUseBrowser ? "Sign in another way" : PairingText.usePassword)
+                } else if let connected, connected.canUseBrowser && !passwordAsked {
+                    Button { Task { await signInWithBrowser() } } label: {
+                        Text(busy ? "Signing in…" : "Sign in").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).disabled(busy)
+                    if connected.canPair {
+                        Button { pairingAsked = true; error = nil } label: {
+                            Label("Sign in with a code", systemImage: "iphone").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered).disabled(busy)
+                    }
+                    if connected.canUsePassword {
+                        Button(PairingText.usePassword) { passwordAsked = true; error = nil }
+                            .frame(maxWidth: .infinity).disabled(busy)
+                    }
                 } else if let connected {
                     TextField("Username", text: $username)
                         .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("Password", text: $password).textContentType(.password)
                     Button(busy ? "Signing in…" : "Sign in") { Task { await signIn() } }
                         .buttonStyle(.borderedProminent).disabled(busy).frame(maxWidth: .infinity)
-                    // The other way in, as on Sovereign's TVs: a code to approve elsewhere.
+                    // The other ways in: a code to approve elsewhere, and the browser.
                     if connected.canPair {
                         Button { pairingAsked = true; error = nil } label: {
-                            Label(PairingText.useCode, systemImage: "iphone").frame(maxWidth: .infinity)
+                            Label("Sign in with a code", systemImage: "iphone").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered).disabled(busy)
+                    }
+                    if connected.canUseBrowser {
+                        Button("Sign in with your browser") { passwordAsked = false; error = nil }
+                            .frame(maxWidth: .infinity).disabled(busy)
                     }
                 } else {
                     Button(busy ? "Connecting…" : "Connect") { Task { await connect() } }
@@ -93,6 +120,25 @@ struct ConnectView: View {
             connected = config
         } catch {
             self.error = "No SovEmu server answered at \(server): \(error.localizedDescription)"
+        }
+    }
+
+    /// The server's own sign-in page in the system browser, then the code exchanged. The browser
+    /// session shares Safari's sign-ins (not ephemeral), as Sovereign's phones'; a cancel is silent.
+    private func signInWithBrowser() async {
+        guard let api = model.api, let request = await api.browserSignIn() else { return }
+        busy = true
+        defer { busy = false }
+        error = nil
+        do {
+            let callback = try await webAuthenticationSession.authenticate(
+                using: request.authorizeURL, callbackURLScheme: request.callbackScheme, preferredBrowserSession: .shared)
+            try await api.finishBrowserSignIn(callback, request: request)
+            model.signedInAnew()
+        } catch let failure as ASWebAuthenticationSessionError where failure.code == .canceledLogin {
+            // Closed by the person: nothing to say.
+        } catch {
+            self.error = error.localizedDescription
         }
     }
 
