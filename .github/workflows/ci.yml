@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The merge queue: each queued pull request is tested on top of main before it merges, so the
+  # required check must run here too.
+  merge_group:
 
 permissions:
   contents: read
