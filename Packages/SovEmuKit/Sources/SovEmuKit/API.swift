@@ -52,13 +52,19 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
     public let verificationUri: String?
     /// Nil when the server has turned password sign-in off.
     public let passwordEndpoint: String?
+    /// The mobile client: what the app signs in as through the system browser.
+    public let mobileClientId: String?
+    /// Where the browser's sign-in comes back to, the app's own scheme.
+    public let mobileRedirectUri: String?
 
     public init(
         signInAvailable: Bool, address: String, issuer: String? = nil, webClientId: String? = nil,
         deviceClientId: String? = nil, authorizationEndpoint: String? = nil, tokenEndpoint: String? = nil,
         revocationEndpoint: String? = nil, deviceAuthorizationEndpoint: String? = nil, verificationUri: String? = nil,
-        passwordEndpoint: String? = nil
+        passwordEndpoint: String? = nil, mobileClientId: String? = nil, mobileRedirectUri: String? = nil
     ) {
+        self.mobileClientId = mobileClientId
+        self.mobileRedirectUri = mobileRedirectUri
         self.signInAvailable = signInAvailable
         self.address = address
         self.issuer = issuer
@@ -91,6 +97,11 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
     /// Whether the app can sign in with a username and password.
     public var canUsePassword: Bool { signInAvailable && passwordEndpoint != nil }
 
+    /// Whether the app can sign in through the system browser (the server's own page).
+    public var canUseBrowser: Bool {
+        signInAvailable && authorizationEndpoint != nil && mobileClientId != nil && mobileRedirectUri != nil
+    }
+
     /// The client's endpoints, resolved against the server address when relative; nil when
     /// nothing can sign in here.
     public func endpoints(relativeTo base: URL?) -> SignInEndpoints? {
@@ -98,7 +109,8 @@ public struct BootstrapConfig: Codable, Sendable, Equatable {
         guard signInAvailable, let clientId = deviceClientId, let token = url(tokenEndpoint) else { return nil }
         return SignInEndpoints(
             clientId: clientId, token: token, revocation: url(revocationEndpoint), password: url(passwordEndpoint),
-            deviceAuthorization: url(deviceAuthorizationEndpoint))
+            deviceAuthorization: url(deviceAuthorizationEndpoint), authorization: url(authorizationEndpoint),
+            mobileClientId: mobileClientId, mobileRedirectURI: mobileRedirectUri)
     }
 }
 
@@ -430,6 +442,24 @@ public final class SovEmuAPI: Sendable {
     public func requestDeviceCode() async throws -> DeviceCode {
         guard let auth else { throw AuthError.signedOut }
         return try await auth.requestDeviceCode()
+    }
+
+    /// Signs a TV in as this account: the code its screen shows (*Sign in a TV*). Throws
+    /// `APIError` (`NOT_FOUND`: no TV is waiting with that code).
+    public func approveDeviceCode(_ code: String) async throws {
+        _ = try await perform(SovEmuGraphQL.ApproveDeviceCodeMutation(code: code))
+    }
+
+    /// A browser sign-in to open (the server's own page), or nil when the server offers none.
+    public func browserSignIn() async -> BrowserSignInRequest? {
+        await auth?.browserSignInRequest()
+    }
+
+    /// Finishes a browser sign-in with the URL the browser came back with: signed in, or an
+    /// `AuthError` saying why.
+    public func finishBrowserSignIn(_ callback: URL, request: BrowserSignInRequest) async throws {
+        guard let auth else { throw AuthError.signedOut }
+        try await auth.finishBrowserSignIn(callback, request: request)
     }
 
     /// One poll for `code`'s approval; `.approved` means signed in.

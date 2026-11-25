@@ -145,7 +145,16 @@ query Bootstrap {
     deviceAuthorizationEndpoint
     verificationUri
     passwordEndpoint
+    # A phone's sign-in through the system browser: the code flow with PKCE, as the mobile
+    # client, back to the app's own scheme.
+    mobileClientId
+    mobileRedirectUri
   }
+}
+
+# Signs a TV in as this user: the code its "Sign in with your phone" screen shows.
+mutation ApproveDeviceCode($code: String!) {
+  approveDeviceCode(userCode: $code)
 }
 
 query Viewer {

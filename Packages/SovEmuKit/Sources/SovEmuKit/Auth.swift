@@ -17,18 +17,29 @@ import Security
 public protocol RefreshTokenStore: Sendable {
     func load() -> String?
     func save(_ token: String)
+    /// Forgets the token and its client.
     func clear()
+    /// The client the token was issued to (the browser's mobile client); nil for the device
+    /// client (a code or a password), and for a token kept before this was.
+    func loadClientId() -> String?
+    func saveClientId(_ id: String?)
 }
 
 /// A refresh token kept only in memory (tests, previews).
 public final class MemoryTokenStore: RefreshTokenStore {
     private let token: Mutex<String?>
+    private let client = Mutex<String?>(nil)
 
     public init(_ token: String? = nil) { self.token = Mutex(token) }
 
     public func load() -> String? { token.withLock { $0 } }
     public func save(_ token: String) { self.token.withLock { $0 = token } }
-    public func clear() { token.withLock { $0 = nil } }
+    public func clear() {
+        token.withLock { $0 = nil }
+        client.withLock { $0 = nil }
+    }
+    public func loadClientId() -> String? { client.withLock { $0 } }
+    public func saveClientId(_ id: String?) { client.withLock { $0 = id } }
 }
 
 #if canImport(Security)
@@ -67,7 +78,15 @@ public struct KeychainTokenStore: RefreshTokenStore {
         }
     }
 
-    public func clear() { SecItemDelete(query as CFDictionary) }
+    public func clear() {
+        SecItemDelete(query as CFDictionary)
+        UserDefaults.standard.removeObject(forKey: clientKey)
+    }
+
+    /// Which client the token is for is no secret: kept beside it in the defaults.
+    private var clientKey: String { "tokenClient:\(account)" }
+    public func loadClientId() -> String? { UserDefaults.standard.string(forKey: clientKey) }
+    public func saveClientId(_ id: String?) { UserDefaults.standard.set(id, forKey: clientKey) }
 }
 #endif
 
@@ -112,10 +131,18 @@ public struct SignInEndpoints: Codable, Sendable, Equatable {
     public let password: URL?
     /// Where to ask for a code to show (RFC 8628); nil from a server that offers none.
     public let deviceAuthorization: URL?
+    /// Where a browser sign-in starts, as the mobile client, back to `mobileRedirectURI`.
+    public let authorization: URL?
+    public let mobileClientId: String?
+    public let mobileRedirectURI: String?
 
-    public init(clientId: String, token: URL, revocation: URL?, password: URL?, deviceAuthorization: URL? = nil) {
+    public init(
+        clientId: String, token: URL, revocation: URL?, password: URL?, deviceAuthorization: URL? = nil,
+        authorization: URL? = nil, mobileClientId: String? = nil, mobileRedirectURI: String? = nil
+    ) {
         (self.clientId, self.token, self.revocation, self.password) = (clientId, token, revocation, password)
-        self.deviceAuthorization = deviceAuthorization
+        (self.deviceAuthorization, self.authorization) = (deviceAuthorization, authorization)
+        (self.mobileClientId, self.mobileRedirectURI) = (mobileClientId, mobileRedirectURI)
     }
 }
 
@@ -190,6 +217,38 @@ public actor TokenClient {
         }
         generation += 1
         refreshing = nil
+        store.saveClientId(nil)
+        accept(tokens)
+    }
+
+    /// A browser sign-in to open, or nil when the server offers none: the code flow with PKCE as
+    /// the mobile client. Kept by the caller until the browser comes back.
+    public func browserSignInRequest() -> BrowserSignInRequest? {
+        guard let endpoints, let authorization = endpoints.authorization, let clientId = endpoints.mobileClientId,
+              let redirect = endpoints.mobileRedirectURI else { return nil }
+        return BrowserSignInRequest(clientId: clientId, redirectURI: redirect, authorization: authorization)
+    }
+
+    /// Finishes a browser sign-in: reads what the browser came back with for `request`, and
+    /// exchanges its code, with the verifier only this app holds, as the mobile client. Signed in
+    /// as that client from then on: refresh and sign-out use it.
+    public func finishBrowserSignIn(_ callback: URL, request: BrowserSignInRequest) async throws {
+        guard let endpoints else { throw AuthError.notConfigured }
+        let code: String
+        switch BrowserRedirect.parse(callback, request: request) {
+        case .code(let c): code = c
+        case let other: throw AuthError(status: 0, code: "browser", message: other.message)
+        }
+        let tokens = try await requestToken(endpoints.token, [
+            ("grant_type", "authorization_code"), ("client_id", request.clientId), ("code", code),
+            ("redirect_uri", request.redirectURI), ("code_verifier", request.pkce.verifier),
+        ])
+        guard tokens.refresh_token != nil else {
+            throw AuthError(status: 200, code: "invalid_response", message: "The server did not return a refresh token.")
+        }
+        generation += 1
+        refreshing = nil
+        store.saveClientId(request.clientId)
         accept(tokens)
     }
 
@@ -241,6 +300,7 @@ public actor TokenClient {
         if case .approved = answer, let tokens = try? Self.readToken(data, status: status) {
             generation += 1
             refreshing = nil
+            store.saveClientId(nil)
             accept(tokens)
         }
         return answer
@@ -293,8 +353,10 @@ public actor TokenClient {
         do {
             // Not configured is not refused: the sign-in stays for when the server answers.
             guard let endpoints else { throw AuthError.notConfigured }
+            // A refresh token is good only with the client it was issued to.
+            let client = store.loadClientId() ?? endpoints.clientId
             tokens = try await requestToken(endpoints.token, [
-                ("grant_type", "refresh_token"), ("client_id", endpoints.clientId), ("refresh_token", refreshToken),
+                ("grant_type", "refresh_token"), ("client_id", client), ("refresh_token", refreshToken),
             ])
         } catch let error as AuthError where error.isInvalidGrant {
             // Unless the user signed in (or out) meanwhile, this sign-in is over.
@@ -313,9 +375,10 @@ public actor TokenClient {
     /// whatever happens.
     public func signOut() async {
         let token = store.load()
+        let client = store.loadClientId()
         forget()
         guard let token, let endpoints, let revocation = endpoints.revocation else { return }
-        var request = Self.formRequest(revocation, [("token", token), ("client_id", endpoints.clientId)])
+        var request = Self.formRequest(revocation, [("token", token), ("client_id", client ?? endpoints.clientId)])
         request.timeoutInterval = 10
         _ = try? await session.data(for: request)
     }

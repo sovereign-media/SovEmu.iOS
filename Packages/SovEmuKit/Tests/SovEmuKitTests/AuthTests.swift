@@ -353,6 +353,7 @@ struct BootstrapTests {
         let selected = [
             "signInAvailable", "address", "issuer", "webClientId", "deviceClientId", "authorizationEndpoint", "tokenEndpoint",
             "revocationEndpoint", "deviceAuthorizationEndpoint", "verificationUri", "passwordEndpoint",
+            "mobileClientId", "mobileRedirectUri",
         ]
         let fields = Dictionary(uniqueKeysWithValues: selected.map { ($0, (config[$0] ?? nil) ?? NSNull()) })
         return (200, Stub.json(["data": ["bootstrapConfig": fields]]))
@@ -385,7 +386,7 @@ struct BootstrapTests {
         #expect(await auth.endpoints == SignInEndpoints(
             clientId: "phone-app", token: stub.base.appending(path: "sso/token"),
             revocation: stub.base.appending(path: "sso/revoke"), password: stub.base.appending(path: "sso/native/password"),
-            deviceAuthorization: stub.base.appending(path: "sso/device")))
+            deviceAuthorization: stub.base.appending(path: "sso/device"), authorization: stub.base.appending(path: "sso/authorize")))
 
         try await api.signIn(username: "ada", password: "pw")
         #expect(try await auth.refresh(replacing: "a1") == "a2")
