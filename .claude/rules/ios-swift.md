@@ -16,8 +16,7 @@ Code style, adapted from Sovereign.iOS's rules to this smaller app.
   threads touch it, what guards them), as `FrameLatency` and `FrameTap` have. Never use
   `nonisolated(unsafe)` to silence a diagnostic.
 - **App models are `@MainActor @Observable final class`es**, injected with `.environment(model)`;
-  no `ObservableObject`/`@Published`. Some (`AppModel`, `GameMenu`) still lack `@MainActor`: add
-  it when you change one.
+  no `ObservableObject`/`@Published`.
 - Work leaves the main actor in an `async` function or an actor, never by blocking it. A
   long-running task is a stored `Task`, cancelled by its owner; rethrow `CancellationError`
   rather than reporting it as a failure.
