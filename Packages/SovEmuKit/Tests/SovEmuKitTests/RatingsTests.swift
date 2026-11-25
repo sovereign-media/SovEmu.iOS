@@ -18,12 +18,6 @@ struct RatingsTests {
         #expect(EsrbRating.everyone10Plus.accessibilityLabel == "ESRB: Everyone 10+ (E10+)")
     }
 
-    @Test func everyRatingHasItsOwnBadgeImage() {
-        let names = EsrbRating.allCases.map(\.badgeName)
-        #expect(Set(names).count == EsrbRating.allCases.count)
-        #expect(EsrbRating.everyone10Plus.badgeName == "esrb_e10")
-    }
-
     @Test func ratingsRoundToHalfStars() {
         #expect(ratingStars(0.8) == 4)
         #expect(ratingStars(0.72) == 3.5)
@@ -46,10 +40,12 @@ struct RatingsTests {
     @Test func aGameDecodesItsRatingAndLists() throws {
         let game = try decode(##"""
             {"id": 7, "system": "nes", "title": "Castlevania", "rating": 0.8, "esrb": "EVERYONE_10_PLUS",
+             "esrbBadgeUrl": "/media/decorations/sovemu/ratings/esrb/e10.png?Sov-UserId=1",
              "modes": ["Single player"], "series": ["Castlevania"], "themes": ["Horror", "Fantasy"],
              "genres": ["Platform", "Action"], "genre": "Platform, Action"}
             """##)
         #expect(game.esrb == .everyone10Plus)
+        #expect(game.esrbBadgeUrl == "/media/decorations/sovemu/ratings/esrb/e10.png?Sov-UserId=1")
         #expect(game.rating == 0.8)
         #expect(game.modes == ["Single player"])
         #expect(game.series == ["Castlevania"])
@@ -59,7 +55,7 @@ struct RatingsTests {
 
     @Test func anOlderServersGameDecodesWithoutThem() throws {
         let game = try decode(##"{"id": 7, "system": "nes", "title": "Castlevania"}"##)
-        #expect(game.esrb == nil)
+        #expect(game.esrb == nil && game.esrbBadgeUrl == nil)
         #expect(game.modes.isEmpty && game.series.isEmpty && game.themes.isEmpty && game.genres.isEmpty)
         #expect(try decode(##"{"id": 7, "system": "nes", "title": "C", "esrb": null}"##).esrb == nil)
     }
@@ -71,7 +67,7 @@ struct RatingsTests {
     }
 
     @Test func theGameFieldsAskForTheNewFields() {
-        #expect(Game.fields.contains("rating esrb modes series themes genres"))
+        #expect(Game.fields.contains("rating esrb esrbBadgeUrl modes series themes genres"))
     }
 
     @Test func homeAsksForTopRated() throws {

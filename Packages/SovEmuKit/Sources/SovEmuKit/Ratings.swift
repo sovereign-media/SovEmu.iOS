@@ -2,9 +2,9 @@ import Foundation
 
 // MARK: - Age ratings and the rating's stars
 
-/// The ESRB's age ratings (`EsrbRating`). The app shows each as the ESRB's own icon (the 2013
-/// set, from Wikimedia Commons): a WebP image it ships, the same file the web client ships,
-/// rendered by its `npm run esrb-badges`.
+/// The ESRB's age ratings (`EsrbRating`). The app shows each as the icon the server gives
+/// (`Game.esrbBadgeUrl`: the ESRB's own, from its built-in decoration set, which an admin may
+/// replace).
 public enum EsrbRating: String, Codable, Sendable, Hashable, CaseIterable {
     case earlyChildhood = "EARLY_CHILDHOOD"
     case everyone = "EVERYONE"
@@ -50,19 +50,6 @@ public enum EsrbRating: String, Codable, Sendable, Hashable, CaseIterable {
         case .mature: "MATURE 17+"
         case .adultsOnly: "ADULTS 18+"
         case .ratingPending: "PENDING"
-        }
-    }
-
-    /// The badge image's name in the app's bundle (`esrb_e10`, with the `webp` extension).
-    public var badgeName: String {
-        switch self {
-        case .earlyChildhood: "esrb_ec"
-        case .everyone: "esrb_e"
-        case .everyone10Plus: "esrb_e10"
-        case .teen: "esrb_t"
-        case .mature: "esrb_m"
-        case .adultsOnly: "esrb_ao"
-        case .ratingPending: "esrb_rp"
         }
     }
 

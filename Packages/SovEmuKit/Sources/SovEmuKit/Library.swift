@@ -65,6 +65,9 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
     public let rating: Double?
     /// The ESRB's age rating; nil when unknown, or one a newer server adds.
     public let esrb: EsrbRating?
+    /// The rating's icon (a `/media/…` URL signed for this user): the server's built-in
+    /// decoration set's `ratings/esrb/<rating>.png`, which an admin may replace.
+    public let esrbBadgeUrl: String?
     /// Ways to play: "Single player", "Multiplayer (simultaneous)" …
     public let modes: [String]
     /// The series and families it belongs to: "Castlevania" …
@@ -90,9 +93,10 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         publisher: String? = nil, genre: String? = nil, players: String? = nil, rating: Double? = nil, discs: Int = 1,
         partKind: PartKind? = nil, favourite: Bool = false, release: String? = nil, patch: String? = nil,
         autoSave: SaveSlot? = nil, imageSmall: String? = nil, cover: String? = nil, esrb: EsrbRating? = nil,
-        modes: [String] = [], series: [String] = [], themes: [String] = [], genres: [String] = []
+        esrbBadgeUrl: String? = nil, modes: [String] = [], series: [String] = [], themes: [String] = [], genres: [String] = []
     ) {
-        (self.esrb, self.modes, self.series, self.themes, self.genres) = (esrb, modes, series, themes, genres)
+        (self.esrb, self.esrbBadgeUrl) = (esrb, esrbBadgeUrl)
+        (self.modes, self.series, self.themes, self.genres) = (modes, series, themes, genres)
         (self.imageSmall, self.cover) = (imageSmall, cover)
         (self.id, self.system, self.title, self.fileTitle, self.tags, self.path) = (id, system, title, fileTitle, tags, path)
         (self.size, self.lastPlayedAt, self.playCount) = (size, lastPlayedAt, playCount)
@@ -106,7 +110,7 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         id system title fileTitle tags path size lastPlayedAt playCount \
         image: mediaUrl(kind: IMAGE, width: 1600) imageSmall: mediaUrl(kind: IMAGE, width: 480) \
         cover: mediaUrl(kind: THUMB, width: 800) thumb: mediaUrl(kind: THUMB, width: 400) video: mediaUrl(kind: VIDEO) \
-        description releaseDate developer publisher genre players rating esrb modes series themes genres \
+        description releaseDate developer publisher genre players rating esrb esrbBadgeUrl modes series themes genres \
         discs partKind favourite release patch autoSave { \(SaveSlot.fields) }
         """
 
@@ -114,7 +118,7 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         case id, system, title, fileTitle, tags, path, size, lastPlayedAt, playCount, image, imageSmall, cover, thumb, video
         case description
         case releaseDate, developer, publisher, genre, players, rating, discs, partKind, favourite, release, patch, autoSave
-        case esrb, modes, series, themes, genres
+        case esrb, esrbBadgeUrl, modes, series, themes, genres
     }
 
     public init(from decoder: Decoder) throws {
@@ -149,6 +153,7 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         autoSave = try c.decodeIfPresent(SaveSlot.self, forKey: .autoSave)
         // A rating a newer server adds is no rating, rather than a game that fails to decode.
         esrb = try c.decodeIfPresent(String.self, forKey: .esrb).flatMap(EsrbRating.init(rawValue:))
+        esrbBadgeUrl = try c.decodeIfPresent(String.self, forKey: .esrbBadgeUrl)
         modes = try c.decodeIfPresent([String].self, forKey: .modes) ?? []
         series = try c.decodeIfPresent([String].self, forKey: .series) ?? []
         themes = try c.decodeIfPresent([String].self, forKey: .themes) ?? []

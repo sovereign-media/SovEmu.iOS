@@ -1,42 +1,19 @@
 import SovEmuKit
 import SwiftUI
-import UIKit
 
-/// An ESRB rating's badge: the ESRB's own icon (the 2013 set, from Wikimedia Commons), a WebP
-/// image the app ships (`Esrb/esrb_<rating>.webp`, the same files the web client ships, rendered
-/// by its `npm run esrb-badges`), shown `height` tall. Bundled rather than loaded
-/// from the server, whose signed per-user URLs cache poorly. iOS decodes WebP since 14.
+/// An ESRB rating's icon from the server (`Game.esrbBadgeUrl`: the ESRB's own, from the server's
+/// built-in decoration set, which an admin may replace), loaded and cached as artwork is
+/// (`RemoteImage`), shown `height` tall at the icons' 2:3, named for VoiceOver.
 struct EsrbBadge: View {
     let rating: EsrbRating
+    let url: String
     var height: CGFloat = 56
 
     var body: some View {
-        if let image = Self.image(rating) {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .frame(height: height)
-                .accessibilityLabel(rating.accessibilityLabel)
-        }
+        RemoteImage(path: url, contentMode: .fit)
+            .frame(width: height * 2 / 3, height: height)
+            .accessibilityElement(children: .ignore)
+            .accessibilityAddTraits(.isImage)
+            .accessibilityLabel(rating.accessibilityLabel)
     }
-
-    /// The badge's image from the app's bundle, read once per rating.
-    @MainActor private static var cache: [EsrbRating: UIImage] = [:]
-
-    @MainActor private static func image(_ rating: EsrbRating) -> UIImage? {
-        if let image = cache[rating] { return image }
-        guard let path = Bundle.main.path(forResource: rating.badgeName, ofType: "webp"),
-              let image = UIImage(contentsOfFile: path)
-        else { return nil }
-        cache[rating] = image
-        return image
-    }
-}
-
-#Preview {
-    HStack {
-        ForEach(EsrbRating.allCases, id: \.self) { EsrbBadge(rating: $0) }
-    }
-    .padding()
-    .background(.black)
 }
