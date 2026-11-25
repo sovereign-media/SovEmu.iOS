@@ -44,7 +44,12 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
     /// `2026-11-19 16:05:56`, UTC.
     public let lastPlayedAt: String?
     public let playCount: Int
+    /// Artwork at the widths it is shown at (pixels, for 2x and 3x screens): the server's lossy
+    /// WebP copies. Backdrops (`image`), cards (`imageSmall`, `thumb`), the box over a backdrop
+    /// (`cover`).
     public let image: String?
+    public let imageSmall: String?
+    public let cover: String?
     public let thumb: String?
     public let video: String?
     public let description: String?
@@ -74,8 +79,9 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         video: String? = nil, description: String? = nil, releaseDate: String? = nil, developer: String? = nil,
         publisher: String? = nil, genre: String? = nil, players: String? = nil, rating: Double? = nil, discs: Int = 1,
         partKind: PartKind? = nil, favourite: Bool = false, release: String? = nil, patch: String? = nil,
-        autoSave: SaveSlot? = nil
+        autoSave: SaveSlot? = nil, imageSmall: String? = nil, cover: String? = nil
     ) {
+        (self.imageSmall, self.cover) = (imageSmall, cover)
         (self.id, self.system, self.title, self.fileTitle, self.tags, self.path) = (id, system, title, fileTitle, tags, path)
         (self.size, self.lastPlayedAt, self.playCount) = (size, lastPlayedAt, playCount)
         (self.image, self.thumb, self.video, self.description) = (image, thumb, video, description)
@@ -86,13 +92,15 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
 
     static let fields = """
         id system title fileTitle tags path size lastPlayedAt playCount \
-        image: mediaUrl(kind: IMAGE) thumb: mediaUrl(kind: THUMB) video: mediaUrl(kind: VIDEO) \
+        image: mediaUrl(kind: IMAGE, width: 1600) imageSmall: mediaUrl(kind: IMAGE, width: 480) \
+        cover: mediaUrl(kind: THUMB, width: 800) thumb: mediaUrl(kind: THUMB, width: 400) video: mediaUrl(kind: VIDEO) \
         description releaseDate developer publisher genre players rating discs partKind favourite release patch \
         autoSave { \(SaveSlot.fields) }
         """
 
     enum CodingKeys: String, CodingKey {
-        case id, system, title, fileTitle, tags, path, size, lastPlayedAt, playCount, image, thumb, video, description
+        case id, system, title, fileTitle, tags, path, size, lastPlayedAt, playCount, image, imageSmall, cover, thumb, video
+        case description
         case releaseDate, developer, publisher, genre, players, rating, discs, partKind, favourite, release, patch, autoSave
     }
 
@@ -111,6 +119,8 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         favourite = try c.decodeIfPresent(Bool.self, forKey: .favourite) ?? false
         fileTitle = try c.decodeIfPresent(String.self, forKey: .fileTitle)
         image = try c.decodeIfPresent(String.self, forKey: .image)
+        imageSmall = try c.decodeIfPresent(String.self, forKey: .imageSmall)
+        cover = try c.decodeIfPresent(String.self, forKey: .cover)
         thumb = try c.decodeIfPresent(String.self, forKey: .thumb)
         video = try c.decodeIfPresent(String.self, forKey: .video)
         description = try c.decodeIfPresent(String.self, forKey: .description)

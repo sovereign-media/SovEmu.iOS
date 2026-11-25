@@ -63,7 +63,7 @@ struct ContinuePanel: View {
             } else {
                 tile(system?.accent ?? Sov.accent)
                 Text(short).font(.system(size: 60, weight: .black)).foregroundStyle(.white.opacity(0.8))
-                RemoteImage(path: game.image ?? game.thumb, contentMode: game.image != nil ? .fill : .fit)
+                RemoteImage(path: game.image ?? game.cover ?? game.thumb, contentMode: game.image != nil ? .fill : .fit)
             }
         }
         .aspectRatio(16 / 9, contentMode: .fit)

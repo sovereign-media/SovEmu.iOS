@@ -58,12 +58,15 @@ actor ArtCache {
 
 /// A picture from the server (a relative `/media/…` path the API handed out), filling its box;
 /// nothing while there is none, or until it loads. `pixelated` scales without smoothing (a save's
-/// screenshot is console pixels). `onLoaded` says whether it drew.
+/// screenshot is console pixels). `shape` is set to the picture's own width over height once it
+/// loads (a binding, not a closure, so a trailing closure stays `onLoaded`). `onLoaded` says
+/// whether it drew.
 struct RemoteImage: View {
     @Environment(AppModel.self) private var model
     let path: String?
     var contentMode: ContentMode = .fill
     var pixelated = false
+    var shape: Binding<Double?>? = nil
     var onLoaded: ((Bool) -> Void)?
     @State private var image: UIImage?
 
@@ -87,6 +90,7 @@ struct RemoteImage: View {
             }
             let loaded = await ArtCache.shared.image(url)
             withAnimation(.easeOut(duration: 0.2)) { image = loaded }
+            if let loaded, loaded.size.height > 0 { shape?.wrappedValue = loaded.size.width / loaded.size.height }
             onLoaded?(loaded != nil)
         }
     }

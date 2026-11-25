@@ -213,6 +213,9 @@ private struct CoverCard: View {
     let isOpen: Bool
     let onOpen: () -> Void
     @State private var loaded = false
+    @State private var imageAspect: Double?
+
+    private var cardAspect: Double { system.boxAspect > 0 ? system.boxAspect : defaultBoxAspect }
 
     var body: some View {
         Button(action: onOpen) {
@@ -223,9 +226,15 @@ private struct CoverCard: View {
                         Text(game.title).font(.system(size: 14, weight: .bold)).foregroundStyle(.white.opacity(0.8))
                             .lineLimit(4).multilineTextAlignment(.center).padding(12)
                     }
-                    RemoteImage(path: game.thumb ?? game.image) { loaded = $0 }
+                    // Art of another shape than the system's boxes is shown whole, not cut.
+                    RemoteImage(
+                        path: game.thumb ?? game.imageSmall,
+                        contentMode: artFills(imageAspect ?? 0, cardAspect) ? .fill : .fit,
+                        shape: $imageAspect
+                    ) { loaded = $0 }
                 }
-                .aspectRatio(3 / 4, contentMode: .fit)
+                // The card takes the shape of the system's boxes (SNES landscape, NES portrait).
+                .aspectRatio(cardAspect, contentMode: .fit)
                 .overlay(alignment: .topLeading) {
                     if game.discs > 1 {
                         Label("\(game.discs)", systemImage: partSymbol(game.partKind))
@@ -355,12 +364,12 @@ struct GamePanel: View {
             tile(system.accent)
             Text(system.short).font(.system(size: 60, weight: .black)).foregroundStyle(.white.opacity(0.8))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            RemoteImage(path: game.image ?? game.thumb, contentMode: game.image != nil ? .fill : .fit)
+            RemoteImage(path: game.image ?? game.cover ?? game.thumb, contentMode: game.image != nil ? .fill : .fit)
             // Its video snap, after a moment, over the artwork (muted: the menus' music plays on).
             if game.video != nil { VideoSnap(path: game.video) }
             LinearGradient(colors: [.clear, Sov.surface.opacity(0.8)], startPoint: .center, endPoint: .bottom)
-            if game.image != nil && game.thumb != nil {
-                RemoteImage(path: game.thumb, contentMode: .fit)
+            if game.image != nil && (game.cover ?? game.thumb) != nil {
+                RemoteImage(path: game.cover ?? game.thumb, contentMode: .fit)
                     .aspectRatio(3 / 4, contentMode: .fit)
                     .frame(height: 96)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
