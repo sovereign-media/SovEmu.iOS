@@ -18,6 +18,12 @@ struct RatingsTests {
         #expect(EsrbRating.everyone10Plus.accessibilityLabel == "ESRB: Everyone 10+ (E10+)")
     }
 
+    @Test func everyRatingHasItsOwnBadgeImage() {
+        let names = EsrbRating.allCases.map(\.badgeName)
+        #expect(Set(names).count == EsrbRating.allCases.count)
+        #expect(EsrbRating.everyone10Plus.badgeName == "esrb_e10")
+    }
+
     @Test func ratingsRoundToHalfStars() {
         #expect(ratingStars(0.8) == 4)
         #expect(ratingStars(0.72) == 3.5)

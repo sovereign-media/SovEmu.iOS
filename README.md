@@ -42,7 +42,7 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
   10), recently played, release year or most played (remembered); Filters searches titles, makers
   and genres and keeps favourites, played or not, two players or more, and genres; Jump goes to a
   letter. A game's panel (beside the grid on an iPad, a sheet on an iPhone) shows its artwork and
-  video snap, its age-rating badge (SovEmu's own, after the ESRB's rating), facts (rating out
+  video snap, its age-rating badge (SovEmu's own WebP image, shipped with the app as the web client ships it), facts (rating out
   of 5, ways to play, series, themes) and description, Continue / Start over or Play, starting from any save by its
   picture, the favourite, its collections, and its soft patch (one button steps through the
   original and each patch).
