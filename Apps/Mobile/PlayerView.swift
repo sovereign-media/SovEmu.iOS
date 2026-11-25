@@ -21,6 +21,7 @@ private let stallSeconds = 3
 private let statsWarning = "Showing stats can affect game performance."
 
 /// Waits for Continue or Start over, when there is an auto save and the player was not asked yet.
+@MainActor
 @Observable
 private final class Chooser {
     var asking = false

@@ -28,6 +28,7 @@ struct SovEmuApp: App {
 /// The server address and its `bootstrapConfig` (both kept across launches) and the API client
 /// for it. Signed in means a refresh token for that server is in the Keychain; the access token
 /// lives in the client.
+@MainActor
 @Observable
 final class AppModel {
     var serverURL: String = UserDefaults.standard.string(forKey: "server") ?? "" {

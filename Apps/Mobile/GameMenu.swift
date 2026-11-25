@@ -26,6 +26,7 @@ struct MenuItem: Identifiable {
 /// system's buttons, by its own label, by pressing an input on that device, with the system's
 /// pad and the player's controller drawn side by side. Mappings are saved to the server
 /// (`saveControllerMapping`, with `system` for this system); players are not saved.
+@MainActor
 @Observable
 final class GameMenu {
     enum Page: Equatable {
