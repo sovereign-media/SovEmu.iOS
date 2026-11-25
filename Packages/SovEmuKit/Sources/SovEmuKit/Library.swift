@@ -13,17 +13,11 @@ public struct SaveSlot: Codable, Sendable, Hashable {
         (self.slot, self.savedAt, self.screenshotUrl) = (slot, savedAt, screenshotUrl)
     }
 
-    static let fields = "slot savedAt screenshotUrl"
 }
 
 /// What a multi-file game's files are (`PartKind`).
 public enum PartKind: String, Codable, Sendable, Hashable {
     case disc = "DISC", disk = "DISK", tape = "TAPE", side = "SIDE", part = "PART"
-
-    public init(from decoder: Decoder) throws {
-        // A kind a newer server adds is drawn as a disc.
-        self = PartKind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .disc
-    }
 }
 
 /// A game in the library, with everything the screens show: its artwork (`image` a screenshot
@@ -106,59 +100,6 @@ public struct Game: Codable, Sendable, Identifiable, Hashable {
         (self.favourite, self.release, self.patch, self.autoSave) = (favourite, release, patch, autoSave)
     }
 
-    static let fields = """
-        id system title fileTitle tags path size lastPlayedAt playCount \
-        image: mediaUrl(kind: IMAGE, width: 1600) imageSmall: mediaUrl(kind: IMAGE, width: 480) \
-        cover: mediaUrl(kind: THUMB, width: 800) thumb: mediaUrl(kind: THUMB, width: 400) video: mediaUrl(kind: VIDEO) \
-        description releaseDate developer publisher genre players rating esrb esrbBadgeUrl modes series themes genres \
-        discs partKind favourite release patch autoSave { \(SaveSlot.fields) }
-        """
-
-    enum CodingKeys: String, CodingKey {
-        case id, system, title, fileTitle, tags, path, size, lastPlayedAt, playCount, image, imageSmall, cover, thumb, video
-        case description
-        case releaseDate, developer, publisher, genre, players, rating, discs, partKind, favourite, release, patch, autoSave
-        case esrb, esrbBadgeUrl, modes, series, themes, genres
-    }
-
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int64.self, forKey: .id)
-        system = try c.decode(String.self, forKey: .system)
-        title = try c.decode(String.self, forKey: .title)
-        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
-        size = try c.decodeIfPresent(Double.self, forKey: .size) ?? 0
-        playCount = try c.decodeIfPresent(Int.self, forKey: .playCount) ?? 0
-        lastPlayedAt = try c.decodeIfPresent(String.self, forKey: .lastPlayedAt)
-        // What an older server does not send has its plain default: the screens show less.
-        path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
-        discs = try c.decodeIfPresent(Int.self, forKey: .discs) ?? 1
-        favourite = try c.decodeIfPresent(Bool.self, forKey: .favourite) ?? false
-        fileTitle = try c.decodeIfPresent(String.self, forKey: .fileTitle)
-        image = try c.decodeIfPresent(String.self, forKey: .image)
-        imageSmall = try c.decodeIfPresent(String.self, forKey: .imageSmall)
-        cover = try c.decodeIfPresent(String.self, forKey: .cover)
-        thumb = try c.decodeIfPresent(String.self, forKey: .thumb)
-        video = try c.decodeIfPresent(String.self, forKey: .video)
-        description = try c.decodeIfPresent(String.self, forKey: .description)
-        releaseDate = try c.decodeIfPresent(String.self, forKey: .releaseDate)
-        developer = try c.decodeIfPresent(String.self, forKey: .developer)
-        publisher = try c.decodeIfPresent(String.self, forKey: .publisher)
-        genre = try c.decodeIfPresent(String.self, forKey: .genre)
-        players = try c.decodeIfPresent(String.self, forKey: .players)
-        rating = try c.decodeIfPresent(Double.self, forKey: .rating)
-        partKind = try c.decodeIfPresent(PartKind.self, forKey: .partKind)
-        release = try c.decodeIfPresent(String.self, forKey: .release)
-        patch = try c.decodeIfPresent(String.self, forKey: .patch)
-        autoSave = try c.decodeIfPresent(SaveSlot.self, forKey: .autoSave)
-        // A rating a newer server adds is no rating, rather than a game that fails to decode.
-        esrb = try c.decodeIfPresent(String.self, forKey: .esrb).flatMap(EsrbRating.init(rawValue:))
-        esrbBadgeUrl = try c.decodeIfPresent(String.self, forKey: .esrbBadgeUrl)
-        modes = try c.decodeIfPresent([String].self, forKey: .modes) ?? []
-        series = try c.decodeIfPresent([String].self, forKey: .series) ?? []
-        themes = try c.decodeIfPresent([String].self, forKey: .themes) ?? []
-        genres = try c.decodeIfPresent([String].self, forKey: .genres) ?? []
-    }
 
     /// "1996", from the release date.
     public var year: String? {
@@ -188,22 +129,6 @@ public struct HomeFeed: Sendable, Equatable {
                 favourites: [Game] = [], collections: [HomeCollection] = []) {
         (self.featured, self.recent, self.added, self.topRated, self.favourites, self.collections) =
             (featured, recent, added, topRated, favourites, collections)
-    }
-}
-
-/// `Query.home`'s rows as the server sends them; `topRated` is empty from an older server.
-struct HomeRows: Decodable {
-    let featured, recent, added, topRated, favourites: [Game]
-
-    enum CodingKeys: String, CodingKey { case featured, recent, added, topRated, favourites }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        featured = try c.decode([Game].self, forKey: .featured)
-        recent = try c.decode([Game].self, forKey: .recent)
-        added = try c.decode([Game].self, forKey: .added)
-        topRated = try c.decodeIfPresent([Game].self, forKey: .topRated) ?? []
-        favourites = try c.decode([Game].self, forKey: .favourites)
     }
 }
 
@@ -257,7 +182,6 @@ public struct GameDecoration: Codable, Sendable, Equatable {
     /// The image's shape.
     public var aspect: Double { height > 0 ? Double(width) / Double(height) : 16.0 / 9.0 }
 
-    static let fields = "url width height top left bottom right"
 }
 
 /// Whether to frame the picture: only when the screen is wider than it, so there are bars to
@@ -286,7 +210,6 @@ public struct Cheat: Codable, Sendable, Equatable, Identifiable {
         (self.id, self.description, self.code, self.enabled) = (id, description, code, enabled)
     }
 
-    static let fields = "id description code enabled"
 }
 
 // MARK: - Systems
@@ -340,10 +263,6 @@ public enum StartPhase: String, Codable, Sendable {
     case ready = "READY", failed = "FAILED"
     /// A phase a newer server knows and this app does not.
     case unknown
-
-    public init(from decoder: Decoder) throws {
-        self = StartPhase(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
-    }
 }
 
 /// What the server says about a start (the `startProgress` query).
@@ -361,5 +280,4 @@ public struct StartStatus: Codable, Sendable, Equatable {
             (phase, read, total, elapsedMs, phaseMs, error)
     }
 
-    static let fields = "phase read total elapsedMs phaseMs error"
 }

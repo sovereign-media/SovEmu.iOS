@@ -171,45 +171,46 @@ struct LibraryTests {
         #expect(api.media("") == nil)
     }
 
-    // MARK: Decoding
+    // MARK: Reading answers
 
-    private func decode<T: Decodable>(_ type: T.Type, _ field: String, _ json: String) throws -> T {
-        try SovEmuAPI.decode(T.self, field: field, from: Data(json.utf8), status: 200)
+    /// An API whose server answers every request with `json`.
+    private func api(_ json: String) -> SovEmuAPI {
+        let stub = Stub { _, _ in (200, json) }
+        return SovEmuAPI(baseURL: stub.base, session: stub.session)
     }
 
-    @Test func decodesAGameWithEverythingTheScreensShow() throws {
-        let games = try decode([Game].self, "search", """
-            {"data":{"search":[{"id":7,"system":"psx","title":"Epic","fileTitle":"Epic (USA)","tags":["USA"],"path":"Epic.chd",
-             "size":7.5e8,"lastPlayedAt":"2026-11-19 16:05:56","playCount":2,"image":"/media/i","thumb":"/media/t",
-             "video":null,"description":"A game.","releaseDate":"1996-02","developer":"Dev","publisher":null,"genre":"RPG",
-             "players":"1-2","rating":0.8,"discs":2,"partKind":"DISC","favourite":true,"release":"Rev 1","patch":"Fix",
-             "autoSave":{"slot":0,"savedAt":1700000000.5,"screenshotUrl":"/media/s"}}]}}
-            """)
+    @Test func readsAGameWithEverythingTheScreensShow() async throws {
+        let games = try await api("""
+            {"data":{"search":[\(APITests.game(id: 7, extra: #""system":"psx","fileTitle":"Epic (USA)","path":"Epic.chd","size":7.5e8,"lastPlayedAt":"2026-11-19 16:05:56","playCount":2,"image":"/media/i","thumb":"/media/t","releaseDate":"1996-02","developer":"Dev","genre":"RPG","players":"1-2","rating":0.8,"discs":2,"partKind":"DISC","favourite":true,"release":"Rev 1","patch":"Fix","autoSave":{"slot":0,"savedAt":1700000000.5,"screenshotUrl":"/media/s"}"#))]}}
+            """).search("epic")
         let g = try #require(games.first)
+        #expect(g.system == "psx" && g.fileTitle == "Epic (USA)" && g.size == 7.5e8 && g.playCount == 2)
         #expect(g.discs == 2 && g.partKind == .disc && g.favourite && g.patch == "Fix" && g.release == "Rev 1")
         #expect(g.autoSave == SaveSlot(slot: 0, savedAt: 1_700_000_000.5, screenshotUrl: "/media/s"))
         #expect(g.year == "1996" && g.byline == "1996 · Dev · RPG")
-        // What an older server leaves out has its plain default.
-        let thin = try decode([Game].self, "search", #"{"data":{"search":[{"id":1,"system":"nes","title":"A"}]}}"#)
-        #expect(thin.first?.discs == 1 && thin.first?.favourite == false && thin.first?.path == "")
-        #expect(Game.fields.contains("thumb: mediaUrl(kind: THUMB, width: 400)") && Game.fields.contains("autoSave { slot savedAt screenshotUrl }"))
     }
 
-    @Test func decodesStartProgressWithPhasesANewerServerAdds() throws {
-        let status = try decode(StartStatus.self, "startProgress", """
+    @Test func readsStartProgressWithPhasesANewerServerAdds() async throws {
+        let status = try await api("""
             {"data":{"startProgress":{"phase":"CONTENT","read":1048576,"total":null,"elapsedMs":3000,"phaseMs":500,"error":null}}}
-            """)
+            """).startProgress(startId: "s")
         #expect(status.phase == .content && status.read == 1_048_576 && status.total == nil)
-        let newer = try decode(StartStatus.self, "startProgress", #"{"data":{"startProgress":{"phase":"WARMING","elapsedMs":0,"phaseMs":0}}}"#)
+        let newer = try await api(
+            #"{"data":{"startProgress":{"phase":"WARMING","read":null,"total":null,"elapsedMs":0,"phaseMs":0,"error":null}}}"#
+        ).startProgress(startId: "s")
         #expect(newer.phase == .unknown)
     }
 
-    @Test func homeDocumentAsksForEveryRowAndTheCollections() {
-        for row in ["featured {", "recent {", "added {", "favourites {", "collections { id name games {"] {
-            #expect(Documents.home.contains(row), "\(row)")
-        }
-        #expect(Documents.collectionChoices.contains("game(id: $id) { collectionIds }"))
-        #expect(Documents.decoration.contains("decoration { url width height top left bottom right }"))
+    @Test func readsCollectionChoicesByNameAndTheDecoration() async throws {
+        let choices = try await api("""
+            {"data":{"collections":[{"id":2,"name":"couch"},{"id":1,"name":"Arcade"}],"game":{"collectionIds":[2]}}}
+            """).collectionChoices(gameId: 7)
+        #expect(choices == [CollectionChoice(id: 1, name: "Arcade", member: false), CollectionChoice(id: 2, name: "couch", member: true)])
+        let decoration = try await api("""
+            {"data":{"game":{"decoration":{"url":"/media/d.png","width":1920,"height":1080,"top":40,"left":240,"bottom":40,"right":240}}}}
+            """).decoration(gameId: 7)
+        #expect(decoration == GameDecoration(url: "/media/d.png", width: 1920, height: 1080, top: 40, left: 240, bottom: 40, right: 240))
+        #expect(try await api(#"{"data":{"game":{"decoration":null}}}"#).decoration(gameId: 7) == nil)
     }
 }
 

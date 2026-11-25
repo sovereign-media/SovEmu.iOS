@@ -1,0 +1,379 @@
+# Every operation the iOS app sends. Apollo generates typed Swift for each (scripts/codegen.sh,
+# into ../Generated) from schema.graphqls, a copy of SovEmu's
+# SovEmu.Backend/SovEmu.Server/schema.graphql, so a field the server does not have fails codegen.
+# Names follow SovEmu.Android's core/src/main/graphql/operations.graphql where the operation is
+# the same.
+
+fragment UserFields on User {
+  id
+  username
+  isAdmin
+  role
+}
+
+fragment SaveFields on SaveSlot {
+  slot
+  savedAt
+  screenshotUrl
+}
+
+fragment GameFields on Game {
+  id
+  system
+  title
+  fileTitle
+  tags
+  path
+  size
+  lastPlayedAt
+  playCount
+  # Artwork at the widths it is shown at (pixels, for 2x and 3x screens): a lossy WebP copy of
+  # each, made once by the server. Backdrops, the box over one, cards.
+  image: mediaUrl(kind: IMAGE, width: 1600)
+  imageSmall: mediaUrl(kind: IMAGE, width: 480)
+  cover: mediaUrl(kind: THUMB, width: 800)
+  thumb: mediaUrl(kind: THUMB, width: 400)
+  video: mediaUrl(kind: VIDEO)
+  description
+  releaseDate
+  developer
+  publisher
+  genre
+  genres
+  players
+  rating
+  esrb
+  # The rating's icon, from the server's decoration set (an admin may replace it).
+  esrbBadgeUrl
+  modes
+  series
+  themes
+  discs
+  partKind
+  favourite
+  release
+  patch
+  autoSave {
+    ...SaveFields
+  }
+}
+
+fragment SystemFields on System {
+  id
+  name
+  short
+  manufacturer
+  year
+  color
+  gameCount
+  playable
+  needsGpu
+  rendering
+  biosMissing
+  boxAspect
+}
+
+fragment SessionFields on GameSession {
+  id
+  gameId
+  system
+  title
+  core
+  width
+  height
+  fps
+  connected
+  discs
+  disc
+}
+
+fragment MappingFields on ControllerMapping {
+  controller
+  system
+  name
+  bindings {
+    input
+    button
+  }
+  source
+}
+
+fragment LayoutFields on PadLayout {
+  id
+  name
+  width
+  height
+  body {
+    x
+    y
+    w
+    h
+    r
+    tone
+  }
+  keys {
+    key
+    label
+    x
+    y
+    w
+    h
+    r
+  }
+}
+
+fragment CheatFields on Cheat {
+  id
+  description
+  code
+  enabled
+}
+
+# Where and how to sign in at this address: asked first, signed out, which also tells the app a
+# SovEmu server is there.
+query Bootstrap {
+  bootstrapConfig {
+    signInAvailable
+    address
+    issuer
+    webClientId
+    nativeClientId
+    authorizationEndpoint
+    tokenEndpoint
+    revocationEndpoint
+    deviceAuthorizationEndpoint
+    verificationUri
+    passwordEndpoint
+  }
+}
+
+query Viewer {
+  viewer {
+    setupRequired
+    user {
+      ...UserFields
+    }
+  }
+}
+
+query ClientConfig {
+  clientConfig {
+    iceServers
+  }
+}
+
+query Systems {
+  systems {
+    ...SystemFields
+  }
+}
+
+query SystemGames($id: ID!) {
+  system(id: $id) {
+    games {
+      ...GameFields
+    }
+  }
+}
+
+query Home {
+  home {
+    featured {
+      ...GameFields
+    }
+    recent {
+      ...GameFields
+    }
+    added {
+      ...GameFields
+    }
+    topRated {
+      ...GameFields
+    }
+    favourites {
+      ...GameFields
+    }
+  }
+  collections {
+    id
+    name
+    games {
+      ...GameFields
+    }
+  }
+}
+
+query Search($text: String!) {
+  search(text: $text) {
+    ...GameFields
+  }
+}
+
+query Patches($id: Int!) {
+  game(id: $id) {
+    patches {
+      id
+      name
+      isDefault
+    }
+  }
+}
+
+mutation SetPatch($gameId: Int!, $patchId: Int) {
+  setPatch(gameId: $gameId, patchId: $patchId)
+}
+
+query GameDecoration($id: Int!) {
+  game(id: $id) {
+    decoration {
+      url
+      width
+      height
+      top
+      left
+      bottom
+      right
+    }
+  }
+}
+
+query Saves($id: Int!) {
+  game(id: $id) {
+    saves {
+      ...SaveFields
+    }
+  }
+}
+
+query CollectionChoices($id: Int!) {
+  collections {
+    id
+    name
+  }
+  game(id: $id) {
+    collectionIds
+  }
+}
+
+mutation SetFavourite($gameId: Int!, $favourite: Boolean!) {
+  setFavourite(gameId: $gameId, favourite: $favourite)
+}
+
+mutation CreateCollection($name: String!) {
+  createCollection(name: $name) {
+    id
+    name
+  }
+}
+
+mutation SetInCollection($collectionId: Int!, $gameId: Int!, $member: Boolean!) {
+  setInCollection(collectionId: $collectionId, gameId: $gameId, member: $member)
+}
+
+query Cheats($id: Int!) {
+  game(id: $id) {
+    cheats {
+      ...CheatFields
+    }
+  }
+}
+
+mutation AddCheat($gameId: Int!, $code: String!, $description: String!) {
+  addCheat(gameId: $gameId, code: $code, description: $description) {
+    ...CheatFields
+  }
+}
+
+mutation SetCheatEnabled($gameId: Int!, $cheatId: Int!, $enabled: Boolean!) {
+  setCheatEnabled(gameId: $gameId, cheatId: $cheatId, enabled: $enabled) {
+    ...CheatFields
+  }
+}
+
+mutation DeleteCheat($gameId: Int!, $cheatId: Int!) {
+  deleteCheat(gameId: $gameId, cheatId: $cheatId)
+}
+
+mutation StartSession($gameId: Int!, $startId: String) {
+  startSession(gameId: $gameId, startId: $startId) {
+    ...SessionFields
+  }
+}
+
+query StartProgress($startId: String!) {
+  startProgress(startId: $startId) {
+    phase
+    read
+    total
+    elapsedMs
+    phaseMs
+    error
+  }
+}
+
+mutation SessionOffer($id: ID!, $sdp: String!, $client: String) {
+  sessionOffer(id: $id, sdp: $sdp, client: $client)
+}
+
+mutation StopSession($id: ID!) {
+  stopSession(id: $id)
+}
+
+mutation NameDevice($name: String!) {
+  nameDevice(name: $name)
+}
+
+mutation SetDisc($sessionId: ID!, $disc: Int!) {
+  setDisc(sessionId: $sessionId, disc: $disc)
+}
+
+mutation SaveState($sessionId: ID!, $slot: Int!) {
+  saveState(sessionId: $sessionId, slot: $slot)
+}
+
+mutation LoadState($sessionId: ID!, $slot: Int!) {
+  loadState(sessionId: $sessionId, slot: $slot)
+}
+
+mutation ReportClientEvents($client: String!, $events: [ClientEventInput!]!) {
+  reportClientEvents(client: $client, events: $events)
+}
+
+query ControllerMappings($system: ID) {
+  controllerMappings(system: $system) {
+    ...MappingFields
+  }
+}
+
+mutation SaveControllerMapping($controller: String!, $system: ID, $name: String!, $bindings: [BindingInput!]!) {
+  saveControllerMapping(controller: $controller, system: $system, name: $name, bindings: $bindings) {
+    ...MappingFields
+  }
+}
+
+mutation ResetControllerMapping($controller: String!, $system: ID) {
+  resetControllerMapping(controller: $controller, system: $system)
+}
+
+# A system's labels and pad, and the controllers' pads.
+query Controls($id: ID!) {
+  system(id: $id) {
+    controls {
+      buttons {
+        button
+        label
+      }
+      sticks {
+        stick
+        label
+        key
+      }
+      layout {
+        ...LayoutFields
+      }
+    }
+  }
+  controllerLayouts {
+    ...LayoutFields
+  }
+}

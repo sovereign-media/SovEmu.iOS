@@ -1,0 +1,3573 @@
+type ActiveSession {
+	id: ID!
+	userId: Int!
+	"""
+	The player; null if the account has been deleted since.
+	"""
+	username: String
+	"""
+	The app and device playing it, as the client named itself (null until it connects, or
+	for a client that predates naming itself).
+	"""
+	client: String
+	gameId: Int!
+	title: String!
+	system: String!
+	"""
+	The core's name.
+	"""
+	core: String!
+	"""
+	When it started, as a Unix time in seconds.
+	"""
+	startedAt: Float!
+	"""
+	A client is streaming it (else it waits, for a client to come back or its idle timeout).
+	"""
+	connected: Boolean!
+	"""
+	Why its client is sent the video codec it is: each codec priced for it (what a frame
+	takes to encode here and to decode there), cheapest first, or the setting that decided.
+	Null until a client has offered.
+	"""
+	codecChoice: String
+	"""
+	How the stream is made; null until the first frame is encoded.
+	"""
+	pipeline: StreamPipeline
+	"""
+	The worker's last health interval (every 10 s while a client is connected).
+	"""
+	health: StreamHealth
+	"""
+	The client's own view of the stream, as it last reported it (once a second while playing).
+	"""
+	clientStats: ClientStreamStats
+}
+
+"""
+What kind of thing happened, for the page's filter.
+"""
+enum ActivityCategory {
+	"""
+	Signing in, and refusals.
+	"""
+	SIGN_IN
+	"""
+	Games started and ended.
+	"""
+	PLAY
+	"""
+	What admins changed.
+	"""
+	ADMIN
+}
+
+"""
+One thing that happened.
+"""
+type ActivityEntry {
+	"""
+	When (Unix seconds).
+	"""
+	at: Float!
+	"""
+	The account that did it; null for a refused sign-in.
+	"""
+	userId: Int
+	"""
+	Its name now, else the name it had (an account since deleted), or for a refused sign-in
+	the name that was tried.
+	"""
+	username: String
+	kind: ActivityKind!
+	category: ActivityCategory!
+	"""
+	What it was about: a game, an account, a job, a system's settings.
+	"""
+	subject: String
+	"""
+	More: a new role, how a game ended.
+	"""
+	detail: String
+	"""
+	The client's address, where there was a request.
+	"""
+	address: String
+}
+
+"""
+What happened.
+"""
+enum ActivityKind {
+	SIGNED_IN
+	SIGN_IN_FAILED
+	"""
+	Refused without checking: too many failed attempts already.
+	"""
+	SIGN_IN_LOCKED_OUT
+	GAME_STARTED
+	GAME_ENDED
+	USER_ADDED
+	ROLE_CHANGED
+	PASSWORD_SET
+	USER_REMOVED
+	SIGNED_OUT_EVERYWHERE
+	"""
+	One browser or app signed out.
+	"""
+	SIGN_IN_ENDED
+	SESSION_STOPPED
+	SETTINGS_CHANGED
+	JOB_RUN
+	CACHE_CLEARED
+}
+
+"""
+A page of the activity log, newest first.
+"""
+type ActivityPage {
+	entries: [ActivityEntry!]!
+	"""
+	Give as `after` for the next page; null when this was the last.
+	"""
+	next: String
+}
+
+"""
+A soft patch in the library, as the admin sees it.
+"""
+type AdminPatch {
+	id: Int!
+	"""
+	From its file: "BPS patch" beside the game, else the file's name.
+	"""
+	name: String!
+	"""
+	The file, relative to the ROM folder.
+	"""
+	file: String!
+	"""
+	`IPS`, `UPS` or `BPS`.
+	"""
+	format: String!
+	"""
+	Named like its game, so applied unless a player chose otherwise.
+	"""
+	isDefault: Boolean!
+	gameId: Int!
+	gameTitle: String!
+	"""
+	The game's system, by id.
+	"""
+	system: String!
+	"""
+	Players who chose this patch.
+	"""
+	chosenBy: Int!
+	"""
+	Players who chose the original for its game, over the default.
+	"""
+	originalBy: Int!
+}
+
+"""
+The backgrounds there are, and the one chosen.
+"""
+type AppearanceSettings {
+	"""
+	The built-in ones, then the admin's own (from `<data>/backgrounds` and
+	`SovEmu__Appearance__BackgroundDirectories`).
+	"""
+	backgrounds: [Background!]!
+	"""
+	A background's id, `random` (a different one each visit) or `none`.
+	"""
+	chosen: String!
+	"""
+	`SovEmu__Appearance__Background` sets it: the page cannot change it.
+	"""
+	fromEnvironment: Boolean!
+	"""
+	The choice as the line that sets it, to move it into the environment.
+	"""
+	environment: String!
+}
+
+"""
+Artwork (box art, screenshots, logos) and videos being downloaded after a lookup.
+"""
+type ArtworkStatus {
+	running: Boolean!
+	"""
+	Downloads queued since the job started.
+	"""
+	total: Int!
+	done: Int!
+	downloaded: Int!
+	failed: Int!
+	"""
+	Of `downloaded`, the gameplay videos.
+	"""
+	videos: Int!
+}
+
+"""
+How many of a kind a system has.
+"""
+type AttentionCount {
+	kind: AttentionKind!
+	"""
+	Empty for a folder no system uses.
+	"""
+	system: String!
+	count: Int!
+}
+
+"""
+A game (or file) needing attention.
+"""
+type AttentionItem {
+	"""
+	Null for a file that is not a game.
+	"""
+	gameId: Int
+	"""
+	Empty for a file in a folder no system uses.
+	"""
+	system: String!
+	"""
+	Empty for a file that is not a game.
+	"""
+	title: String!
+	"""
+	Relative to the library.
+	"""
+	path: String!
+	"""
+	Why it has no information, the tags it shares, the parts missing, or why a file was
+	skipped.
+	"""
+	detail: String!
+}
+
+"""
+What needs attention.
+"""
+enum AttentionKind {
+	"""
+	No game information: never looked up, or not found.
+	"""
+	NO_INFORMATION
+	"""
+	Has information, but is queued to be looked up again (a source stopped before reaching
+	it, or fields were added since); the lookup after each scan asks it.
+	"""
+	AWAITING_LOOKUP
+	"""
+	No box art, beside it or downloaded.
+	"""
+	NO_BOX_ART
+	"""
+	The same title and tags in two or more files of a system.
+	"""
+	DUPLICATE
+	"""
+	A multi-part game with a part missing.
+	"""
+	MISSING_PARTS
+	"""
+	A file the last scan could not place as a game.
+	"""
+	UNRECOGNISED
+}
+
+"""
+A service SovEmu looks games up in.
+"""
+type AttributedService {
+	name: String!
+	"""
+	What SovEmu takes from it.
+	"""
+	provides: String!
+	url: String!
+	"""
+	The data's licence, where the service states one.
+	"""
+	licence: String
+	licenceUrl: String
+	"""
+	What its terms ask of an app, or that they state nothing.
+	"""
+	terms: String!
+}
+
+"""
+What the server draws on and ships with (the cores are `cores`).
+"""
+type Attributions {
+	services: [AttributedService!]!
+	components: [BundledComponent!]!
+	"""
+	The FinalBurn Neo commit whose DAT files name arcade games.
+	"""
+	fbneoCommit: String!
+}
+
+"""
+A background clients draw behind every screen: a transparent image laid over the surface
+colour, scaled to cover the screen.
+"""
+type Background {
+	"""
+	Its name in settings (`SovEmu__Appearance__Background`): `lattice`, or a file's name in the folders.
+	"""
+	id: String!
+	"""
+	As shown: "Lattice", "Sunset beach".
+	"""
+	name: String!
+	"""
+	The image (WebP, PNG or JPEG): a URL signed for this user.
+	"""
+	url: String!
+	"""
+	One SovEmu ships, rather than the admin's own.
+	"""
+	builtin: Boolean!
+}
+
+"""
+A backup kept.
+"""
+type BackupFile {
+	name: String!
+	bytes: Float!
+	"""
+	When it was made (Unix seconds).
+	"""
+	created: Float!
+	"""
+	Its download: a signed URL, for this admin only.
+	"""
+	url: String!
+}
+
+"""
+The backups, and how they are made.
+"""
+type Backups {
+	"""
+	Where they are kept (`SovEmu__Backups__Directory`).
+	"""
+	dir: String!
+	"""
+	A backup every this many hours (`SovEmu__Backups__IntervalHours`; 0: none on a schedule).
+	"""
+	intervalHours: Float!
+	"""
+	How many are kept (`SovEmu__Backups__Keep`; 0: every one).
+	"""
+	keep: Int!
+	"""
+	The backup restored at startup, if `SovEmu__Backups__RestoreFrom` is set.
+	"""
+	restoreFrom: String
+	"""
+	Newest first.
+	"""
+	files: [BackupFile!]!
+}
+
+"""
+One input driving one button.
+"""
+type Binding {
+	"""
+	A controller input (`south`, `l1`, `up` …) or a keyboard's `KeyboardEvent.code`.
+	"""
+	input: String!
+	button: PadButton!
+}
+
+"""
+One input driving one button.
+"""
+input BindingInput {
+	"""
+	A controller input (`south`, `l1`, `up` …) or a keyboard's `KeyboardEvent.code`.
+	"""
+	input: String!
+	button: PadButton!
+}
+
+type BiosFile {
+	"""
+	The name the core reads it by (in the recommended folder: `USA/IPL.bin`).
+	"""
+	name: String!
+	label: String!
+	state: BiosFileState!
+	"""
+	Where it was found, relative to the BIOS folder (`roms/<folder>/…` beside the games).
+	"""
+	foundAt: String
+	"""
+	Of the file found.
+	"""
+	md5: String
+	"""
+	The good dumps' MD5s, any one of which is right. Empty when any content is fine, or
+	for a system that takes any number of dumps (PS2), whose list is too long to show.
+	"""
+	expectedMd5: [String!]!
+	"""
+	Bytes expected.
+	"""
+	size: Float!
+}
+
+"""
+One BIOS file.
+"""
+enum BiosFileState {
+	"""
+	A known good dump (found by its checksum or its name, anywhere in the BIOS folder).
+	"""
+	OK
+	"""
+	Found by its name, but not a dump the list knows: a bad dump, or a revision it lacks.
+	Used all the same.
+	"""
+	UNVERIFIED
+	"""
+	No longer reported: BIOS files are found wherever they are in the BIOS folder.
+	"""
+	MISPLACED @deprecated(reason: "BIOS files are found in any layout; nothing is misplaced")
+	MISSING
+}
+
+"""
+A BIOS the system uses: one file, or any one of several.
+"""
+type BiosGroup {
+	label: String!
+	importance: BiosImportance!
+	"""
+	What it does, and what happens without it.
+	"""
+	help: String!
+	"""
+	Any one of `files` is enough.
+	"""
+	anyOne: Boolean!
+	satisfied: Boolean!
+	files: [BiosFile!]!
+}
+
+"""
+How much a system depends on a BIOS file.
+"""
+enum BiosImportance {
+	"""
+	Games will not start without it.
+	"""
+	REQUIRED
+	"""
+	The core has a built-in replacement that plays most games.
+	"""
+	RECOMMENDED
+	"""
+	A boot logo, an add-on.
+	"""
+	OPTIONAL
+}
+
+"""
+A system's BIOS files as a whole.
+"""
+enum BiosState {
+	"""
+	Everything required and recommended is there and verified.
+	"""
+	READY
+	"""
+	Playable, but a file is unverified.
+	"""
+	WARNING
+	"""
+	Playable, without a recommended file.
+	"""
+	INCOMPLETE
+	"""
+	A required file is missing: games will not start.
+	"""
+	MISSING
+}
+
+"""
+Where and how to sign in at the address this request reached. Apps ask it first, signed out,
+and use these URLs as given (they hard-code nothing but `/graphql`).
+"""
+type BootstrapConfig {
+	"""
+	Whether anything can sign in at this address. False when it is not one of
+	`SovEmu__Http__PublicUrl`'s; then the rest is null, and `address` says what to add.
+	"""
+	signInAvailable: Boolean!
+	"""
+	The address the request reached, as `Host` named it.
+	"""
+	address: String!
+	"""
+	The OpenID Connect issuer for this address (discovery at
+	`<issuer>/.well-known/openid-configuration`).
+	"""
+	issuer: String
+	"""
+	The web client's id: the authorization code flow with PKCE.
+	"""
+	webClientId: String
+	"""
+	The apps' id: the device grant, and the password fallback.
+	"""
+	nativeClientId: String
+	authorizationEndpoint: String
+	tokenEndpoint: String
+	revocationEndpoint: String
+	"""
+	Where an app asks for a code to show (RFC 8628 device authorization).
+	"""
+	deviceAuthorizationEndpoint: String
+	"""
+	Where a person approves that code, in a signed-in browser.
+	"""
+	verificationUri: String
+	"""
+	The apps' password fallback: a form post of `client_id`, `username`, `password` and
+	`scope`, answered like the token endpoint. Null when `SovEmu__Authentication__PasswordSignIn` is off.
+	"""
+	passwordEndpoint: String
+}
+
+"""
+Which build of the server this is.
+"""
+type BuildInfoNode {
+	"""
+	The server's version.
+	"""
+	version: String!
+	"""
+	The commit it was built from; null for a local build.
+	"""
+	revision: String
+	"""
+	That commit's time (ISO 8601); null for a local build.
+	"""
+	built: String
+	"""
+	The libretro stable release its cores come from.
+	"""
+	libretroRelease: String!
+	"""
+	SovEmu's licence (SPDX: `AGPL-3.0-or-later`).
+	"""
+	licence: String!
+	"""
+	Where SovEmu's source is. A modified server must point this at its own.
+	"""
+	source: String!
+}
+
+"""
+A component the image ships besides the cores.
+"""
+type BundledComponent {
+	name: String!
+	what: String!
+	licence: String!
+	url: String!
+	"""
+	The commit it is taken from, when pinned.
+	"""
+	commit: String
+}
+
+"""
+A cheat code for a game, this user's.
+"""
+type Cheat {
+	id: Int!
+	description: String!
+	code: String!
+	enabled: Boolean!
+}
+
+"""
+Everything a client declares about what it can play: one complete document, sent whole with
+every `sessionOffer`. The server never reads a missing fact as permission.
+"""
+type ClientCapabilities {
+	"""
+	The document's shape: 1. A document of any other version is refused (`BAD_REQUEST`,
+	with a message asking the player to update the app).
+	"""
+	version: Int!
+	"""
+	Every video codec the client can decode, one row each: the decoder it would use.
+	"""
+	videoDecoders: [VideoDecoder!]!
+	display: Display!
+}
+
+"""
+Everything a client declares about what it can play: one complete document, sent whole with
+every `sessionOffer`. The server never reads a missing fact as permission.
+"""
+input ClientCapabilitiesInput {
+	"""
+	The document's shape: 1. A document of any other version is refused (`BAD_REQUEST`,
+	with a message asking the player to update the app).
+	"""
+	version: Int!
+	"""
+	Every video codec the client can decode, one row each: the decoder it would use.
+	"""
+	videoDecoders: [VideoDecoderInput!]!
+	display: DisplayInput!
+}
+
+type ClientConfig {
+	"""
+	`RTCIceServer` objects (STUN/TURN) for WebRTC, from `SovEmu__Streaming__IceServers`.
+	"""
+	iceServers: JSON!
+}
+
+"""
+One client error.
+"""
+type ClientEvent {
+	"""
+	When the server received it (Unix seconds).
+	"""
+	at: Float!
+	"""
+	When it happened, on the client's clock (Unix seconds), if it said.
+	"""
+	clientAt: Float
+	"""
+	The player; null for an account since deleted.
+	"""
+	username: String
+	client: String!
+	kind: ClientEventKind!
+	message: String!
+	"""
+	The game session it happened in, if any.
+	"""
+	sessionId: String
+	"""
+	That session's game, when the server could tell (the session was still running).
+	"""
+	gameId: Int
+	title: String
+	system: String
+}
+
+"""
+Client errors of one kind from one client (app and version) in a window: how many, from how
+many players, and the latest.
+"""
+type ClientEventGroup {
+	kind: ClientEventKind!
+	"""
+	The app and its version, as it named itself (`android 1.4.0 (Mi TV, Android 11)`).
+	"""
+	client: String!
+	count: Int!
+	"""
+	How many accounts reported it.
+	"""
+	users: Int!
+	"""
+	The latest one's time (Unix seconds) and message.
+	"""
+	lastAt: Float!
+	lastMessage: String!
+}
+
+"""
+One thing that went wrong on a client.
+"""
+input ClientEventInput {
+	kind: ClientEventKind!
+	"""
+	What happened, in a line (kept to 500 characters).
+	"""
+	message: String!
+	"""
+	The game session it happened in, if any.
+	"""
+	sessionId: ID
+	"""
+	When, in seconds since the Unix epoch on the client's clock.
+	"""
+	at: Float
+}
+
+"""
+What went wrong on a client.
+"""
+enum ClientEventKind {
+	"""
+	WebRTC could not connect.
+	"""
+	CONNECTION_FAILED
+	"""
+	A connected stream dropped.
+	"""
+	CONNECTION_LOST
+	"""
+	No new picture for a while during play.
+	"""
+	STREAM_STALLED
+	"""
+	A controller the client has no layout for.
+	"""
+	CONTROLLER_UNKNOWN
+	"""
+	A screen or the app failed.
+	"""
+	SCREEN_ERROR
+	OTHER
+}
+
+"""
+What a player's stats panel shows (times in ms, rates in kbit/s); null where the client has
+no value.
+"""
+type ClientStreamStats {
+	"""
+	Button to pixel, as the client estimates it.
+	"""
+	estimateMs: Float
+	"""
+	Button to frame, as the client measures it (the display's own lag comes on top).
+	"""
+	inputToFrameMs: Float
+	inputRttMs: Float
+	netRttMs: Float
+	jitterMs: Float
+	decodeMs: Float
+	fps: Float
+	kbps: Float
+	"""
+	Packets lost since the stream began.
+	"""
+	packetsLost: Float
+	"""
+	The player's video decoder.
+	"""
+	decoder: String
+	"""
+	Whether that decoder runs in low-latency mode; null where the client cannot tell.
+	"""
+	lowLatencyDecode: Boolean
+}
+
+type Collection {
+	id: Int!
+	name: String!
+	gameCount: Int!
+	"""
+	Kept by an admin for everyone: everyone sees it, only an admin changes it.
+	"""
+	shared: Boolean!
+	"""
+	Declared in the server's environment (`SovEmu__Collections__…`): changed only there.
+	"""
+	declared: Boolean!
+	"""
+	Its games, most recently added first.
+	"""
+	games: [Game!]!
+}
+
+"""
+A group of settings, as the README's settings table has them.
+"""
+enum ConfigGroup {
+	ACCOUNTS
+	LIBRARY
+	GAME_INFORMATION
+	STREAMING
+	OPERATIONS
+}
+
+"""
+A setting of the running server.
+"""
+type ConfigSetting {
+	group: ConfigGroup!
+	"""
+	The environment variable that sets it.
+	"""
+	name: String!
+	"""
+	As given, with credentials masked; null when unset. A secret only says `(set)` or
+	`(unset)`.
+	"""
+	value: String
+	"""
+	What the server makes of it, where that differs from the value (an unset
+	`SovEmu__Paths__Library` is `<data>/roms`).
+	"""
+	effective: String
+	source: ConfigSource!
+	secret: Boolean!
+	default: String
+	description: String!
+}
+
+"""
+Where a setting's value comes from.
+"""
+enum ConfigSource {
+	"""
+	Not set: the default.
+	"""
+	DEFAULT
+	ENVIRONMENT
+	COMMAND_LINE
+}
+
+"""
+How much of its CPU and memory the container (server and game sessions) is using.
+"""
+type ContainerUsage {
+	"""
+	When it was read (Unix seconds).
+	"""
+	sampledAt: Float!
+	"""
+	Over the last interval, a share (0–100) of `allowedCores`; null on the first reading.
+	"""
+	cpuPercent: Float
+	"""
+	The cores the container may use: its quota, or the host's count.
+	"""
+	allowedCores: Float!
+	"""
+	Whether a CPU quota is set (else `allowedCores` is the host's count).
+	"""
+	cpuLimited: Boolean!
+	"""
+	In use, less page cache it can drop.
+	"""
+	memoryUsedBytes: Float!
+	"""
+	The container's limit, or the host's memory when it has none.
+	"""
+	memoryLimitBytes: Float!
+	memoryLimited: Boolean!
+	"""
+	`memoryUsedBytes` as a share (0–100) of `memoryLimitBytes`.
+	"""
+	memoryPercent: Float
+}
+
+"""
+The default controller mappings (admins).
+"""
+type ControllerDefaults {
+	"""
+	From the environment (locked) and from the admin page.
+	"""
+	mappings: [ControllerMapping!]!
+	"""
+	The admin page's defaults as `SovEmu__Controllers__<n>__…` lines.
+	"""
+	environment: [String!]!
+}
+
+"""
+A mapping for one controller model, on one system or on every system.
+"""
+type ControllerMapping {
+	"""
+	`keyboard`, a known model (`xbox`, `dualsense` …) or `pad:<vendor>:<product>`.
+	"""
+	controller: String!
+	"""
+	The system it is for, or null for every system.
+	"""
+	system: String
+	"""
+	What the controller called itself when the mapping was saved, for lists.
+	"""
+	name: String!
+	bindings: [Binding!]!
+	source: MappingSource!
+}
+
+"""
+A libretro core: shipped in the image, or found in the cores folder.
+"""
+type CoreReport {
+	"""
+	Its file name without `_libretro.<ext>` (`snes9x`).
+	"""
+	name: String!
+	"""
+	What the core calls itself: from its probe, else the licence table's name for it.
+	"""
+	label: String
+	version: String
+	"""
+	Its file in the cores folder; null when it is shipped but missing here.
+	"""
+	file: String
+	"""
+	It loads (the image's build-time probe, else a probe now).
+	"""
+	loaded: Boolean!
+	error: String
+	"""
+	The systems it plays.
+	"""
+	systems: [CoreSystem!]!
+	"""
+	As its core info file states it; null for a core the image doesn't ship.
+	"""
+	licence: String
+	"""
+	Its licence forbids commercial use.
+	"""
+	nonCommercial: Boolean!
+	"""
+	Its source.
+	"""
+	sourceUrl: String
+}
+
+"""
+A system a core plays.
+"""
+type CoreSystem {
+	id: String!
+	name: String!
+	"""
+	This system's games start with this core.
+	"""
+	chosen: Boolean!
+}
+
+type Decoration {
+	"""
+	The image (PNG), under `/media/decorations/`: a URL signed for this user.
+	"""
+	url: String!
+	"""
+	Its size in pixels.
+	"""
+	width: Int!
+	height: Int!
+	"""
+	The window's margins from the image's edges, in the image's pixels.
+	"""
+	top: Int!
+	left: Int!
+	bottom: Int!
+	right: Int!
+	"""
+	The set it comes from (`sovemu` is the built-in one).
+	"""
+	set: String!
+}
+
+"""
+A decoration set, and what it holds.
+"""
+type DecorationSet {
+	name: String!
+	"""
+	SovEmu's own set, drawn at build time.
+	"""
+	builtin: Boolean!
+	"""
+	It has an image for every game nothing closer covers (`default.png`).
+	"""
+	hasDefault: Boolean!
+	"""
+	The systems with an image of their own, by id.
+	"""
+	systems: [String!]!
+	"""
+	Images for single games.
+	"""
+	games: Int!
+}
+
+type DecorationsReport {
+	"""
+	Every set found in the decoration folders, by name (`sovemu` is the built-in one).
+	"""
+	sets: [DecorationSet!]!
+	"""
+	The set for systems without one of their own (`SovEmu__Decorations__Set`; `none`: no frame).
+	"""
+	default: String!
+	"""
+	The folders sets are read from, the first winning for the same file: those in
+	`SovEmu__Decorations__Directories`, `<data>/decorations`, then the built-in one.
+	"""
+	folders: [String!]!
+	systems: [SystemDecoration!]!
+}
+
+"""
+The screen a client shows games on.
+"""
+type Display {
+	"""
+	In physical pixels.
+	"""
+	width: Int!
+	height: Int!
+	"""
+	Pictures a second.
+	"""
+	refreshHz: Float!
+}
+
+"""
+The screen a client shows games on.
+"""
+input DisplayInput {
+	"""
+	In physical pixels.
+	"""
+	width: Int!
+	height: Int!
+	"""
+	Pictures a second.
+	"""
+	refreshHz: Float!
+}
+
+"""
+An emulator setting (a libretro core option).
+"""
+type EmulatorSetting {
+	key: String!
+	description: String!
+	"""
+	What it does, in the emulator's words (empty where it does not say).
+	"""
+	info: String!
+	"""
+	The key of the emulator's category for it.
+	"""
+	category: String
+	choices: [String!]!
+	"""
+	A display label per choice.
+	"""
+	labels: [String!]!
+	"""
+	The emulator's default.
+	"""
+	default: String!
+	value: String!
+	source: SettingSource!
+}
+
+"""
+A system's emulator settings.
+"""
+type EmulatorSettings {
+	system: String!
+	"""
+	The emulator's name and version.
+	"""
+	core: String!
+	settings: [EmulatorSetting!]!
+	categories: [SettingCategory!]!
+	"""
+	The emulator lists its settings only with a game loaded, and none has run yet.
+	"""
+	needsGame: Boolean!
+	"""
+	The admin's changes as `SovEmu__Systems__…` lines, to move into configuration.
+	"""
+	environment: [String!]!
+	runAhead: RunAheadSetting!
+}
+
+"""
+An encoder a session gave up, and why.
+"""
+type EncoderFallback {
+	encoder: String!
+	reason: String!
+}
+
+"""
+The startup encoder test: every video encoder run on a moving picture and timed, once,
+before the server takes requests, so no game starts without it.
+"""
+type EncoderTest {
+	encoders: [TestedEncoder!]!
+	"""
+	How long the whole test took, and the longest it may (10 seconds).
+	"""
+	tookMs: Int!
+	budgetMs: Int!
+	"""
+	Why the test gave no answer (the worker could not be run, or did not answer in time);
+	null when it did.
+	"""
+	note: String
+	"""
+	When it ran (Unix seconds).
+	"""
+	testedAt: Float
+}
+
+"""
+What one frame cost an encoder at one picture size, in the startup encoder test.
+"""
+type EncoderTiming {
+	width: Int!
+	height: Int!
+	"""
+	Frames timed.
+	"""
+	frames: Int!
+	"""
+	Milliseconds a frame, on average: colour conversion, any upload to a GPU, and the encode.
+	"""
+	meanMs: Float!
+	"""
+	Milliseconds a frame at the 95th percentile.
+	"""
+	p95Ms: Float!
+}
+
+"""
+The ESRB's age ratings.
+"""
+enum EsrbRating {
+	"""
+	EC: Early Childhood (until 2018).
+	"""
+	EARLY_CHILDHOOD
+	"""
+	E: Everyone (K-A, Kids to Adults, until 1998).
+	"""
+	EVERYONE
+	"""
+	E10+: Everyone 10+.
+	"""
+	EVERYONE_10_PLUS
+	"""
+	T: Teen.
+	"""
+	TEEN
+	"""
+	M: Mature 17+.
+	"""
+	MATURE
+	"""
+	AO: Adults Only 18+.
+	"""
+	ADULTS_ONLY
+	"""
+	RP: Rating Pending.
+	"""
+	RATING_PENDING
+}
+
+"""
+How one signal's exports have gone since the server started.
+"""
+type ExportResult {
+	"""
+	When the last export finished (Unix seconds); null before the first.
+	"""
+	lastAt: Float
+	ok: Boolean!
+	"""
+	The last export's error, URLs' credentials masked.
+	"""
+	error: String
+	exports: Float!
+	failures: Float!
+}
+
+"""
+A game, and how many accounts keep it as a favourite.
+"""
+type FavouriteGame {
+	gameId: Int!
+	title: String!
+	system: String!
+	users: Int!
+}
+
+type Game {
+	id: Int!
+	"""
+	The system's id.
+	"""
+	system: String!
+	title: String!
+	"""
+	The title from the file name, when game information supplied a better `title`.
+	"""
+	fileTitle: String
+	"""
+	No-Intro tags from the file name: "USA", "Rev 1" …
+	"""
+	tags: [String!]!
+	"""
+	The file, relative to the library.
+	"""
+	path: String!
+	"""
+	Bytes.
+	"""
+	size: Float!
+	"""
+	When this user last played it (UTC, `YYYY-MM-DD HH:MM:SS`).
+	"""
+	lastPlayedAt: String
+	playCount: Int!
+	"""
+	What tells it apart from games of the same title on its system: the tags they do not
+	share ("Translation", "Rev 1"), else its file's own title. Null when its title is its own.
+	"""
+	release: String
+	"""
+	What its several files are (discs, disks, tapes, sides or parts), shown with its count
+	(`discs`). Null for a game in one file.
+	"""
+	partKind: PartKind
+	"""
+	The soft patch this user plays it with (a translation, a fix, a hack), by name: their
+	choice, else the patch beside it with its name. Null: the original.
+	"""
+	patch: String
+	"""
+	The soft patches found with it (IPS, UPS or BPS, beside it with its name or in a folder
+	named as it), the default first. Choose one with `setPatch`.
+	"""
+	patches: [Patch!]!
+	"""
+	The decoration (bezel) to draw around its picture: the set chosen for its system
+	(`SovEmu__Decorations__Set`, `SovEmu__Systems__<id>__Decoration`), its own image there, else its
+	system's, else the set's default. Null when the set is `none` or has nothing for it.
+	"""
+	decoration: Decoration
+	"""
+	One of this user's favourites.
+	"""
+	favourite: Boolean!
+	"""
+	The ids of this user's collections that hold it.
+	"""
+	collectionIds: [Int!]!
+	"""
+	The ids of the shared collections that hold it.
+	"""
+	sharedCollectionIds: [Int!]!
+	"""
+	How many discs (1 for most games): a multi-disc game is one entry, its discs changed in play.
+	"""
+	discs: Int!
+	"""
+	The artwork and video it has.
+	"""
+	media: [MediaKind!]!
+	"""
+	Where to load a kind of artwork from, if the game has it: a URL signed for this user
+	(valid `SovEmu__Assets__UrlHours`; ask again for a fresh one). With `width` (the box it is
+	shown in, in device pixels), a lossy WebP copy at most that wide: the width is rounded up
+	to the grid copies are made on (16 px steps, from 144), and a picture narrower than it is
+	not enlarged. Without it, the original. Videos are always the original.
+	"""
+	mediaUrl(kind: MediaKind!, width: Int): String
+	description: String
+	"""
+	`YYYY-MM-DD`, `YYYY-MM` or `YYYY`.
+	"""
+	releaseDate: String
+	developer: String
+	publisher: String
+	genre: String
+	"""
+	As the game information says it: "1", "1-2", "1 to 4" …
+	"""
+	players: String
+	"""
+	0 to 1.
+	"""
+	rating: Float
+	"""
+	The ESRB's age rating, if the game information has one.
+	"""
+	esrb: EsrbRating
+	"""
+	The ESRB rating's icon (PNG), if the game has a rating and there is an icon for it:
+	`artwork/ratings/esrb/<rating>.png`, the admin's own in the data folder, else the
+	built-in one. A URL signed for this user.
+	"""
+	esrbBadgeUrl: String
+	"""
+	Ways to play: "Single player", "Multiplayer (simultaneous)" …
+	"""
+	modes: [String!]!
+	"""
+	The series and families it belongs to: "Castlevania" …
+	"""
+	series: [String!]!
+	"""
+	Its themes: "Horror", "Fantasy" …
+	"""
+	themes: [String!]!
+	"""
+	Its genres, as `genre` lists them.
+	"""
+	genres: [String!]!
+	"""
+	This user's save states (slot 0 is the auto save, written when a session ends).
+	"""
+	saves: [SaveSlot!]!
+	"""
+	The auto save, if there is one: where this user left off.
+	"""
+	autoSave: SaveSlot
+	"""
+	This user's cheats for it.
+	"""
+	cheats: [Cheat!]!
+}
+
+"""
+A game's plays in the window.
+"""
+type GamePlays {
+	"""
+	Null for a game since gone from the library.
+	"""
+	gameId: Int
+	title: String!
+	system: String!
+	sessions: Int!
+	seconds: Float!
+	players: Int!
+}
+
+type GameSession {
+	id: ID!
+	gameId: Int!
+	system: String!
+	title: String!
+	"""
+	The core's name.
+	"""
+	core: String!
+	width: Int!
+	height: Int!
+	fps: Float!
+	"""
+	A client is streaming it.
+	"""
+	connected: Boolean!
+	"""
+	How many discs the game has (1 for most games).
+	"""
+	discs: Int!
+	"""
+	The disc in the tray, from 1.
+	"""
+	disc: Int!
+}
+
+"""
+A device the startup GPU probe tried.
+"""
+type GpuDevice {
+	"""
+	The render node; none for the software renderer.
+	"""
+	node: String
+	driver: String
+	"""
+	`hardware`, `virtual` (a hypervisor's adapter) or `software`.
+	"""
+	kind: String!
+	vendor: String
+	renderer: String
+	version: String
+	works: Boolean!
+	error: String
+	"""
+	Workers render on this one.
+	"""
+	chosen: Boolean!
+}
+
+"""
+Where 3D systems render, decided at startup.
+"""
+type GpuStatus {
+	"""
+	`SovEmu__Rendering__Gpu` as configured.
+	"""
+	setting: String!
+	mode: Rendering!
+	"""
+	What 3D games draw with.
+	"""
+	renderer: String
+	devices: [GpuDevice!]!
+	"""
+	Why the setting could not be honoured, or why nothing could be probed.
+	"""
+	note: String
+	"""
+	What workers are started with (`--gpu`): a render node, `auto`, `software` or `off`.
+	"""
+	workerArg: String!
+	"""
+	When the probe ran (Unix seconds): once, at startup, so a GPU added later needs a
+	restart. None when nothing was probed (`SovEmu__Rendering__Gpu=off`).
+	"""
+	probedAt: Float
+}
+
+"""
+The home screen's feed.
+"""
+type Home {
+	"""
+	The hero: games with artwork and a description first, a new pick each day.
+	"""
+	featured: [Game!]!
+	"""
+	This user's games, most recently played first.
+	"""
+	recent: [Game!]!
+	"""
+	The library's newest games.
+	"""
+	added: [Game!]!
+	"""
+	This user's favourites, by title.
+	"""
+	favourites: [Game!]!
+	"""
+	The library's best rated games (`Game.rating`), best first.
+	"""
+	topRated: [Game!]!
+}
+
+"""
+What the server's host is. Read once at startup; anything unreadable is null.
+"""
+type HostFacts {
+	"""
+	`AMD Ryzen 7 5800U with Radeon Graphics`.
+	"""
+	cpuModel: String
+	"""
+	`x86_64`, `aarch64`.
+	"""
+	arch: String!
+	"""
+	Logical CPUs on the host.
+	"""
+	hostCpus: Int
+	"""
+	Logical CPUs the server may run on (its affinity; a quota is in `usage.allowedCores`).
+	"""
+	usableCpus: Int!
+	"""
+	The CPU's highest clock, MHz.
+	"""
+	maxMhz: Int
+	"""
+	Instruction sets some cores need or run better with: `sse4_1`, `sse4_2`, `avx`, `avx2`,
+	`avx512f` (x86 only).
+	"""
+	features: [String!]!
+	"""
+	The host's memory, bytes.
+	"""
+	memoryBytes: Float
+	"""
+	The kernel's release.
+	"""
+	kernel: String
+}
+
+"""
+An ICE server, without its credentials.
+"""
+type IceServerSummary {
+	urls: [String!]!
+	"""
+	It has a username and credential (a TURN server).
+	"""
+	hasCredential: Boolean!
+}
+
+"""
+A scalar that can represent any JSON value.
+"""
+scalar JSON
+
+"""
+A background job (`jobs.rs`).
+"""
+enum JobName {
+	"""
+	Rescans the library.
+	"""
+	SCAN
+	"""
+	`MIRROR` mode: copies the source into the local mirror, then rescans it.
+	"""
+	MIRROR_SYNC
+	"""
+	Looks up game information for games without it.
+	"""
+	METADATA
+	"""
+	Database upkeep: expired sign-ins and old job history deleted.
+	"""
+	MAINTENANCE
+	"""
+	A backup of the database, the signing keys and the saves.
+	"""
+	BACKUP
+	"""
+	After each scan: removed games' information and artwork deleted, missing files fetched
+	again.
+	"""
+	RECONCILE
+}
+
+"""
+How a job's run ended.
+"""
+enum JobOutcome {
+	RUNNING
+	SUCCEEDED
+	FAILED
+	"""
+	Stopped by the server shutting down.
+	"""
+	CANCELLED
+	"""
+	The server stopped without finishing it.
+	"""
+	INTERRUPTED
+}
+
+"""
+One run of a background job.
+"""
+type JobRun {
+	id: ID!
+	job: JobName!
+	trigger: JobTrigger!
+	outcome: JobOutcome!
+	"""
+	Unix seconds.
+	"""
+	startedAt: Float!
+	"""
+	Unix seconds; none while it runs.
+	"""
+	finishedAt: Float
+	seconds: Float
+	"""
+	What it did ("1,204 games: 3 added, 0 removed"), or why it failed.
+	"""
+	message: String
+}
+
+"""
+A background job this server has, and its state now.
+"""
+type JobState {
+	name: JobName!
+	"""
+	Its name for people ("Library scan").
+	"""
+	label: String!
+	description: String!
+	"""
+	How often it runs on its own, in minutes; none if it does not (it follows another job,
+	or its interval is 0).
+	"""
+	intervalMinutes: Float
+	"""
+	When it next runs on its own (Unix seconds); none while it runs or if it does not.
+	"""
+	nextRunAt: Float
+	running: Boolean!
+	"""
+	What started the run under way.
+	"""
+	runningTrigger: JobTrigger
+	"""
+	When the run under way started (Unix seconds).
+	"""
+	runningSince: Float
+	"""
+	Its latest run (the one under way, if it is running).
+	"""
+	lastRun: JobRun
+}
+
+"""
+What started a job's run.
+"""
+enum JobTrigger {
+	STARTUP
+	"""
+	Its interval (`SovEmu__…IntervalMinutes`).
+	"""
+	SCHEDULE
+	"""
+	An admin.
+	"""
+	ADMIN
+}
+
+"""
+How the library is read.
+"""
+enum LibraryMode {
+	"""
+	Straight from the library (local disk or a share on the LAN).
+	"""
+	DIRECT
+	"""
+	From the library, keeping local copies of what is used.
+	"""
+	CACHE
+	"""
+	From a full local copy kept in sync.
+	"""
+	MIRROR
+}
+
+type LibraryStatus {
+	mode: LibraryMode!
+	games: Int!
+	"""
+	`CACHE` mode: bytes on local disk.
+	"""
+	cacheBytes: Float
+	"""
+	`MIRROR` mode: the current or last sync.
+	"""
+	mirror: MirrorSync
+}
+
+"""
+One of a line's fields.
+"""
+type LogField {
+	key: String!
+	value: String!
+}
+
+"""
+How much a line says.
+"""
+enum LogLevel {
+	TRACE
+	DEBUG
+	INFO
+	WARN
+	ERROR
+}
+
+"""
+One line of the log.
+"""
+type LogLineNode {
+	"""
+	Its place in the buffer.
+	"""
+	id: Float!
+	"""
+	When (Unix seconds).
+	"""
+	at: Float!
+	level: LogLevel!
+	"""
+	The module that logged it, or `worker` for a game session's worker.
+	"""
+	target: String!
+	message: String!
+	fields: [LogField!]!
+	"""
+	The game session it belongs to, if any.
+	"""
+	session: String
+}
+
+"""
+Lines of the log, and where to read on from.
+"""
+type LogPage {
+	"""
+	Whether the server keeps its log for this view (`SovEmu__Logging__BufferLines` above 0).
+	"""
+	enabled: Boolean!
+	"""
+	Oldest first.
+	"""
+	lines: [LogLineNode!]!
+	"""
+	Give as `after` to read only what comes next.
+	"""
+	cursor: Float!
+}
+
+"""
+Where a mapping comes from.
+"""
+enum MappingSource {
+	"""
+	The user's own.
+	"""
+	USER
+	"""
+	An admin's default, from the admin page.
+	"""
+	ADMIN
+	"""
+	A default from `SovEmu__Controllers__<n>__…`, which an admin cannot change (locked).
+	"""
+	ENVIRONMENT
+}
+
+"""
+Artwork and video kinds a game can have.
+"""
+enum MediaKind {
+	"""
+	A screenshot, shown behind the game.
+	"""
+	IMAGE
+	"""
+	Box art.
+	"""
+	THUMB
+	"""
+	The title's logo.
+	"""
+	MARQUEE
+	"""
+	A short gameplay video.
+	"""
+	VIDEO
+}
+
+"""
+A source's account: its level and the limits that come with it.
+"""
+type MetadataAccount {
+	user: String
+	"""
+	The service's own level number.
+	"""
+	level: Int
+	"""
+	ScreenScraper: 2 adds a thread, 3 or more add five.
+	"""
+	contribution: Int
+	maxThreads: Int
+	maxRequestsPerMinute: Int
+	maxRequestsPerDay: Float
+	maxMissesPerDay: Float
+	"""
+	KB/s.
+	"""
+	maxDownloadKbps: Int
+}
+
+"""
+The game a lookup is on.
+"""
+type MetadataCurrent {
+	gameId: Int!
+	title: String!
+	system: String!
+	"""
+	The source being asked, if one is.
+	"""
+	provider: String
+	step: MetadataStep!
+}
+
+"""
+A field of game information, to refresh only some.
+"""
+enum MetadataField {
+	TITLE
+	DESCRIPTION
+	RELEASE_DATE
+	DEVELOPER
+	PUBLISHER
+	GENRE
+	PLAYERS
+	RATING
+	"""
+	The ESRB's age rating.
+	"""
+	ESRB
+	"""
+	Ways to play.
+	"""
+	MODES
+	"""
+	Series and families.
+	"""
+	SERIES
+	THEMES
+	BOX_ART
+	"""
+	A screenshot, shown behind the game.
+	"""
+	SCREENSHOT
+	"""
+	The game's logo.
+	"""
+	MARQUEE
+	VIDEO
+}
+
+enum MetadataOutcome {
+	FOUND
+	NOT_FOUND
+	"""
+	Not stored: asked again by the next lookup.
+	"""
+	FAILED
+}
+
+type MetadataProviderProgress {
+	id: String!
+	name: String!
+	asked: Int!
+	found: Int!
+	notFound: Int!
+	errors: Int!
+	quota: MetadataQuota
+	"""
+	The account the source uses, as the service last described it.
+	"""
+	account: MetadataAccount
+	"""
+	Lookups the source takes at once, from its account's limits (and
+	`SovEmu__Metadata__ScreenScraper__Threads`).
+	"""
+	threads: Int!
+}
+
+"""
+A service's own count of today's requests.
+"""
+type MetadataQuota {
+	requestsToday: Float!
+	maxRequestsPerDay: Float
+	"""
+	Lookups today that found nothing, which the service caps on its own.
+	"""
+	missesToday: Float!
+	maxMissesPerDay: Float
+}
+
+"""
+A game a lookup has just looked up.
+"""
+type MetadataRecent {
+	gameId: Int!
+	"""
+	Its title after the lookup.
+	"""
+	title: String!
+	system: String!
+	outcome: MetadataOutcome!
+	"""
+	The sources that found something.
+	"""
+	sources: [String!]!
+	"""
+	Why it failed, if it did.
+	"""
+	detail: String
+}
+
+"""
+A game-information lookup's progress.
+"""
+type MetadataStatus {
+	running: Boolean!
+	total: Int!
+	done: Int!
+	found: Int!
+	notFound: Int!
+	failed: Int!
+	"""
+	The configured sources, in the order they are asked.
+	"""
+	sources: [String!]!
+	"""
+	Why a source stopped early (bad credentials, quota) or is not used, if one did.
+	"""
+	notes: [String!]!
+	"""
+	The box art downloads that follow a lookup, in the background.
+	"""
+	artwork: ArtworkStatus!
+	"""
+	The games being looked up now: several at once when a source's account allows it.
+	"""
+	working: [MetadataCurrent!]!
+	"""
+	When the current (or last) lookup started and finished, Unix seconds.
+	"""
+	startedAt: Float
+	finishedAt: Float
+	"""
+	Seconds left, from the time per game so far.
+	"""
+	etaSeconds: Float
+	"""
+	Each system's share of the lookup.
+	"""
+	systems: [MetadataSystemProgress!]!
+	"""
+	What each source answered.
+	"""
+	providers: [MetadataProviderProgress!]!
+	"""
+	The last games looked up, most recent first.
+	"""
+	recent: [MetadataRecent!]!
+}
+
+"""
+What a source is doing for the game being looked up.
+"""
+enum MetadataStep {
+	"""
+	Hashing the game's file, for a source that matches by hash.
+	"""
+	HASHING
+	ASKING
+	"""
+	Pacing between requests, or backing off a busy service.
+	"""
+	WAITING
+}
+
+type MetadataSystemProgress {
+	system: String!
+	total: Int!
+	done: Int!
+}
+
+"""
+A mirror sync's progress.
+"""
+type MirrorSync {
+	running: Boolean!
+	filesTotal: Int!
+	filesDone: Int!
+	"""
+	Bytes.
+	"""
+	bytesTotal: Float!
+	"""
+	Bytes.
+	"""
+	bytesDone: Float!
+	removed: Int!
+	failed: Int!
+	"""
+	Unix seconds when the last sync finished.
+	"""
+	finishedAt: Float
+	error: String
+}
+
+type Mutation {
+	"""
+	First run: creates the admin account. Only while no account exists. The browser is then
+	signed in at the server's sign-in page (a cookie only `/oauth/authorize` reads), so the
+	web client finishes signing in there without asking for the password again. Apps sign in
+	at `/oauth/token`; there is no sign-in mutation.
+	"""
+	setup(username: String!, password: String!): User!
+	"""
+	Admins: adds an account (a viewer unless `role` says otherwise).
+	"""
+	addUser(input: NewUserInput!): User!
+	"""
+	Admins: makes an account an admin or a viewer. Not the last admin, and not an account the
+	environment declares.
+	"""
+	setUserRole(userId: Int!, role: Role!): User!
+	"""
+	Admins: sets an account's password (at least 8 characters), which signs that user out
+	everywhere. Not an account the environment declares.
+	"""
+	setUserPassword(userId: Int!, password: String!): Boolean!
+	"""
+	Admins: removes an account and signs it out everywhere; everything of theirs in the
+	database goes with it, and their saves stay on disk. Not their own, not the last admin,
+	and not an account the environment declares.
+	"""
+	removeUser(userId: Int!): Boolean!
+	"""
+	Admins: signs one browser or app out (`id` from `signIns` or `user`); it must sign in
+	again. The account's other sign-ins stand.
+	"""
+	endSignIn(id: ID!): Boolean!
+	"""
+	Names this sign-in's device, as the app describes itself ("SovEmu for Android 1.4.0 ·
+	Mi TV Stick"), for the admin's lists of sign-ins. An app calls it once signed in, and
+	again when its version changes. `BAD_REQUEST` for an empty name or one over 80
+	characters.
+	"""
+	nameDevice(name: String!): Boolean!
+	"""
+	Admins: signs an account out of every browser and app.
+	"""
+	signOutEverywhere(userId: Int!): Boolean!
+	"""
+	Adds a game to this user's favourites, or takes it out.
+	"""
+	setFavourite(gameId: Int!, favourite: Boolean!): Boolean!
+	setPatch(gameId: Int!, patchId: Int): Boolean!
+	"""
+	Creates a collection (CONFLICT if this user already has one by that name).
+	"""
+	createCollection(name: String!): Collection!
+	renameCollection(id: Int!, name: String!): Boolean!
+	deleteCollection(id: Int!): Boolean!
+	"""
+	Puts a game in one of this user's collections, or takes it out.
+	"""
+	setInCollection(collectionId: Int!, gameId: Int!, member: Boolean!): Boolean!
+	"""
+	Deletes a save state (and its screenshot).
+	"""
+	deleteSave(gameId: Int!, slot: Int!): Boolean!
+	"""
+	Adds a cheat (on) for a game; returns the game's cheats. A running session gets it.
+	"""
+	addCheat(gameId: Int!, code: String!, description: String! = ""): [Cheat!]!
+	"""
+	Turns a cheat on or off; returns the game's cheats.
+	"""
+	setCheatEnabled(gameId: Int!, cheatId: Int!, enabled: Boolean!): [Cheat!]!
+	deleteCheat(gameId: Int!, cheatId: Int!): Boolean!
+	"""
+	Starts a game (ending this user's running one first) and returns once it is ready to
+	stream. Give a `startId` (8–64 letters, digits, `-` or `_`) to follow its progress with
+	`startProgress` meanwhile.
+	"""
+	startSession(gameId: Int!, startId: String): GameSession!
+	"""
+	Ends a session, the player's own or (admins) anyone's; the worker writes the battery save
+	and the auto save first.
+	"""
+	stopSession(id: ID!): Boolean!
+	"""
+	Answers a client's WebRTC offer (SDP) for a session with the worker's answer (SDP).
+	`client` names the app and device (`web`, `android 1.4.0 (Mi TV)`), as its stats do,
+	for the admin's sessions page. `capabilities` is what the client can decode and show:
+	the whole document, every time. It is kept against the sign-in's device; `BAD_REQUEST`
+	for one of another version (the message asks the player to update the app) or one that
+	does not hold together.
+	"""
+	sessionOffer(id: ID!, sdp: String!, client: String, capabilities: ClientCapabilitiesInput): String!
+	"""
+	Presses the console's reset button.
+	"""
+	resetSession(id: ID!): Boolean!
+	"""
+	Changes a multi-disc game's disc (from 1), as when the game asks for the next one.
+	"""
+	setDisc(sessionId: ID!, disc: Int!): Boolean!
+	"""
+	Saves the session's game to a slot (1–9), with a screenshot.
+	"""
+	saveState(sessionId: ID!, slot: Int!): Boolean!
+	"""
+	Loads a slot (0 is the auto save) into the session's game.
+	"""
+	loadState(sessionId: ID!, slot: Int!): Boolean!
+	"""
+	Admins: rescans the library.
+	"""
+	scanLibrary: ScanReport!
+	"""
+	Admins: starts a mirror sync in the background (`MIRROR` mode only).
+	"""
+	syncLibrary: Boolean!
+	"""
+	Admins: starts looking up game information in the background: games without it, or
+	with `force` every game, or with `staleAfterDays` the games last looked up longer ago;
+	one system, or all. `fields` refreshes only those fields (the rest are kept) and
+	`sources` asks only those sources (ids, as `metadataStatus.sources` lists them). What a
+	game has is never cleared by a source that finds nothing.
+	"""
+	fetchMetadata(system: ID, force: Boolean! = false, fields: [MetadataField!]! = [], sources: [String!]! = [], staleAfterDays: Int): MetadataStatus!
+	"""
+	Plays a game with one of its soft patches from now on (`Game.patches`), or the original
+	(`patchId` null). Its next session loads it so; a patched game keeps its own saves.
+	Admins: deletes the game cache's copies (mode `cache`), but those of games being played;
+	the bytes freed. Games are copied again as they are played.
+	"""
+	clearCache: Float!
+	"""
+	Admins: starts a background job now, as its schedule would (`METADATA`: games without
+	game information). `CONFLICT` if it is running; `BAD_REQUEST` if this server does not
+	have it (`MIRROR_SYNC` outside `MIRROR` mode).
+	"""
+	runJob(job: JobName!): [JobState!]!
+	"""
+	Admins: changes a system's emulator settings. Applies to the next game started.
+	"""
+	changeEmulatorSettings(system: ID!, changes: [SettingChange!]!): EmulatorSettings!
+	"""
+	Admins: how many frames a system's pictures run ahead of its games (0: off), or with no
+	`frames` back to SovEmu's default (1 frame on the systems that support it). Applies to the next game started. Refused while
+	`SovEmu__Systems__<id>__RunAhead` sets it.
+	"""
+	setRunAhead(system: ID!, frames: Int): EmulatorSettings!
+	"""
+	Saves this user's mapping for a controller model on a system, or on every system without
+	one, replacing its defaults wherever they play.
+	"""
+	saveControllerMapping(controller: String!, system: ID, name: String! = "", bindings: [BindingInput!]!): ControllerMapping!
+	"""
+	Admins: sets the default mapping for a controller model on a system (or every system),
+	for every user without their own. A model whose default is in the environment cannot be changed here (CONFLICT).
+	"""
+	saveControllerDefault(controller: String!, system: ID, name: String! = "", bindings: [BindingInput!]!): ControllerMapping!
+	"""
+	Admins: forgets the admin's default for a controller model. Returns whether it had one.
+	"""
+	resetControllerDefault(controller: String!, system: ID): Boolean!
+	"""
+	Puts a controller model back on the defaults (an admin's, else the built-in ones).
+	Returns whether it had a mapping of the user's own.
+	"""
+	resetControllerMapping(controller: String!, system: ID): Boolean!
+	"""
+	Admins: the background for everyone: a background's id, `random` or `none`. `CONFLICT`
+	while `SovEmu__Appearance__Background` sets it; `NOT_FOUND` for a background that is not there.
+	"""
+	setBackground(id: String!): Boolean!
+	"""
+	Admins: tests this browser's connection to the game streams. Give an offer (SDP) with a
+	data channel; the answer (SDP) comes from a peer on a free game port, answered as a game
+	is, which echoes whatever the data channel carries for `testSeconds`. The browser reads
+	the round trip and the path (direct, or through a relay) from its own end.
+	"""
+	testConnection(sdp: String!): String!
+	"""
+	Signed-in users: what went wrong on this client (a connection that failed, a stalled
+	picture, a screen that crashed), for the server's log beside the session's own lines and
+	the admin's Client errors page. `client` names it and its version (`android 0.1.0
+	(MiTV-AFMU1, Android 11)`). At most 20 events a call and 60 a minute per user; the rest
+	are dropped. Returns how many were taken (0 when `SovEmu__ClientErrors__Enabled` is off).
+	"""
+	reportClientEvents(client: String!, events: [ClientEventInput!]!): Int!
+	"""
+	Admins: looks one game up again (its game information and box art), as a background
+	job (`METADATA`), whether or not it has information already. `CONFLICT` while a lookup
+	runs.
+	"""
+	lookUpGame(gameId: Int!): MetadataStatus!
+	"""
+	Admins: deletes a backup (`NOT_FOUND` if there is none by that name).
+	"""
+	deleteBackup(name: String!): Boolean!
+	"""
+	Admins: makes a collection everyone sees (`CONFLICT` if one has that name).
+	"""
+	createSharedCollection(name: String!): Collection!
+	"""
+	Admins: renames a shared collection.
+	"""
+	renameSharedCollection(id: Int!, name: String!): Boolean!
+	"""
+	Admins: deletes a shared collection (its games stay in the library).
+	"""
+	deleteSharedCollection(id: Int!): Boolean!
+	"""
+	Admins: puts a game in a shared collection, or takes it out.
+	"""
+	setInSharedCollection(collectionId: Int!, gameId: Int!, member: Boolean!): Boolean!
+}
+
+"""
+How browsers and apps reach the server and its game streams.
+"""
+type NetworkReport {
+	"""
+	The web client and API's address (`SovEmu__Http__Listen`).
+	"""
+	http: String!
+	"""
+	The UDP ports for game sessions, one per concurrent session (`SovEmu__Streaming__Udp__Ports`).
+	"""
+	udpFirst: Int!
+	udpLast: Int!
+	portCount: Int!
+	"""
+	Ports held: by a session, or by a worker that has not exited yet.
+	"""
+	portsInUse: Int!
+	sessions: Int!
+	"""
+	The address session ports bind to (`SovEmu__Streaming__Udp__Bind`).
+	"""
+	udpBind: String!
+	"""
+	The address browsers send media to, as workers advertise it.
+	"""
+	advertisedIp: String!
+	"""
+	It was worked out (the machine's primary address), not set (`SovEmu__Streaming__AdvertiseAddress`). In
+	a container that is the container's own address, which browsers cannot reach.
+	"""
+	advertisedIpDetected: Boolean!
+	"""
+	The addresses sign-in works at: `SovEmu__Http__PublicUrl`, else this host's own.
+	"""
+	publicUrls: [String!]!
+	publicUrlsConfigured: Boolean!
+	"""
+	Sign-in works at the address this request was made to.
+	"""
+	signInAvailableHere: Boolean!
+	"""
+	The address this request was made to (its `Host`).
+	"""
+	requestHost: String!
+	"""
+	This request's client, as the server resolved it (behind trusted proxies, the client).
+	"""
+	clientIp: String
+	"""
+	This request's `X-Forwarded-For`, for checking a proxy.
+	"""
+	forwardedFor: String
+	trustedProxies: [String!]!
+	secureCookies: Boolean!
+	"""
+	STUN/TURN servers handed to browsers.
+	"""
+	iceServers: [IceServerSummary!]!
+	"""
+	The settings this page is about, as the Configuration page shows them.
+	"""
+	settings: [ConfigSetting!]!
+}
+
+input NewUserInput {
+	username: String!
+	password: String!
+	role: Role! = VIEWER
+}
+
+"""
+One licence text, and the packages it covers.
+"""
+type Notice {
+	"""
+	SPDX (`MIT`).
+	"""
+	id: String!
+	name: String!
+	packages: [NoticePackage!]!
+	text: String!
+}
+
+"""
+A package SovEmu ships.
+"""
+type NoticePackage {
+	name: String!
+	version: String!
+	repository: String
+}
+
+"""
+A RetroPad button (libretro's RETRO_DEVICE_ID_JOYPAD_*).
+"""
+enum PadButton {
+	B
+	Y
+	SELECT
+	START
+	UP
+	DOWN
+	LEFT
+	RIGHT
+	A
+	X
+	L
+	R
+	L2
+	R2
+	L3
+	R3
+}
+
+"""
+A button on a diagram.
+"""
+type PadKey {
+	"""
+	A RetroPad button on a system's pad, an input name (`south` …) on a controller's.
+	"""
+	key: String!
+	"""
+	What the pad prints on it.
+	"""
+	label: String!
+	x: Float!
+	y: Float!
+	w: Float!
+	h: Float!
+	r: Float!
+}
+
+"""
+A pad, drawn from shapes on a `width`×`height` canvas.
+"""
+type PadLayout {
+	"""
+	A system id, or a controller family (`xbox`, `playstation`, `nintendo`, `generic`).
+	"""
+	id: String!
+	name: String!
+	width: Float!
+	height: Float!
+	body: [Shape!]!
+	keys: [PadKey!]!
+}
+
+"""
+What a multi-part game's files are.
+"""
+enum PartKind {
+	"""
+	Optical discs (CDs, DVDs, GD-ROMs).
+	"""
+	DISC
+	"""
+	Floppy disks (the Famicom Disk System's included).
+	"""
+	DISK
+	"""
+	Cassette tapes.
+	"""
+	TAPE
+	"""
+	The sides of one disk or tape.
+	"""
+	SIDE
+	"""
+	Numbered files of any other kind.
+	"""
+	PART
+}
+
+type Patch {
+	id: Int!
+	"""
+	From its file: "BPS patch" beside the game, else the file's name ("English v1.1").
+	"""
+	name: String!
+	"""
+	Applied unless the player chose otherwise (it is beside the game, with its name).
+	"""
+	isDefault: Boolean!
+}
+
+"""
+One UTC day's plays.
+"""
+type PlayDay {
+	"""
+	The day's start (UTC midnight), Unix seconds.
+	"""
+	day: Float!
+	sessions: Int!
+	seconds: Float!
+}
+
+"""
+What was played over a window.
+"""
+type PlayStatistics {
+	"""
+	The window, Unix seconds: from its start up to now.
+	"""
+	from: Float!
+	to: Float!
+	totals: PlayTotals!
+	"""
+	Days with plays, oldest first (days without are left out).
+	"""
+	days: [PlayDay!]!
+	"""
+	The most played games first, by time played (the top 10).
+	"""
+	games: [GamePlays!]!
+	"""
+	Every account that played, the most time first.
+	"""
+	players: [PlayerPlays!]!
+	"""
+	Every system played, the most time first.
+	"""
+	systems: [SystemPlays!]!
+	"""
+	The most favourited games, of all time (the top 10).
+	"""
+	favourites: [FavouriteGame!]!
+}
+
+"""
+Plays and time played, totalled.
+"""
+type PlayTotals {
+	sessions: Int!
+	"""
+	Seconds played (a Float: a year of a busy server can pass 2^31).
+	"""
+	seconds: Float!
+	players: Int!
+	games: Int!
+}
+
+"""
+An account's plays in the window.
+"""
+type PlayerPlays {
+	userId: Int!
+	"""
+	Null for an account since deleted.
+	"""
+	username: String
+	sessions: Int!
+	seconds: Float!
+	games: Int!
+}
+
+type Query {
+	"""
+	Where and how to sign in here. Works signed out: an app's first question, which also tells
+	it a SovEmu server is at the address it was given.
+	"""
+	bootstrapConfig: BootstrapConfig!
+	"""
+	Which build of the server this is, for anyone signed in (an app can show it).
+	"""
+	buildInfo: BuildInfoNode!
+	"""
+	Who is signed in, and whether first-run setup is needed. Works signed out.
+	"""
+	viewer: Viewer!
+	clientConfig: ClientConfig!
+	"""
+	Admins: one account, with its sign-ins, what it has played and its saves.
+	"""
+	user(id: Int!): UserDetails!
+	"""
+	Admins: every browser and app signed in, across accounts, the most recently used first.
+	"""
+	signIns: [SignInNode!]!
+	"""
+	Admins: the accounts.
+	"""
+	users: [User!]!
+	"""
+	The home screen's feed.
+	"""
+	home: Home!
+	"""
+	Games from every system matching every word of `text` (title, file title, developer,
+	publisher or genre; case and accents ignored), best first: titles starting with it,
+	then titles holding every word, then the rest. At most `limit` (default 48, up to 200).
+	"""
+	search(text: String!, limit: Int): [Game!]!
+	"""
+	This user's collections, by name.
+	"""
+	collections: [Collection!]!
+	"""
+	The collections an admin keeps for everyone, by name.
+	"""
+	sharedCollections: [Collection!]!
+	"""
+	The systems with games (hidden ones and those with none left out), in SovEmu's order.
+	"""
+	systems: [System!]!
+	system(id: ID!): System
+	game(id: Int!): Game!
+	"""
+	This user's running game, if any.
+	"""
+	currentSession: GameSession
+	"""
+	How far the start `startId` (given to `startSession`) has got. Poll it while
+	`startSession` waits.
+	"""
+	startProgress(startId: String!): StartStatus!
+	"""
+	Admins: every game being played now, oldest first, with how each stream is made.
+	"""
+	activeSessions: [ActiveSession!]!
+	"""
+	Admins: the games that failed most recently, newest first, with the core's last lines.
+	"""
+	sessionFailures: [SessionFailure!]!
+	"""
+	Admins: how the library is played (direct, cache or mirror), its size, and the mirror's
+	sync. Its errors can name the share's paths.
+	"""
+	libraryStatus: LibraryStatus!
+	"""
+	Admins: the game-information lookup's progress and its notes.
+	"""
+	metadataStatus: MetadataStatus!
+	"""
+	Admins: every soft patch in the library, with its game and how many players chose it.
+	"""
+	patches: [AdminPatch!]!
+	"""
+	Admins: the decoration sets found, and the set each system's games are framed with.
+	"""
+	decorations: DecorationsReport!
+	"""
+	Admins: the game-information services and the components the image ships, with their
+	licences and terms.
+	"""
+	attributions: Attributions!
+	"""
+	Admins: every open-source package the server and the web client ship, with its licence
+	text, grouped by licence.
+	"""
+	thirdPartyNotices: ThirdPartyNotices!
+	"""
+	Admins: OpenTelemetry export: whether it is on, where to, and how each signal's last
+	export went.
+	"""
+	telemetry: TelemetryReport!
+	"""
+	Admins: where the data folder's space goes. Measured at most every few minutes, unless
+	`refresh` asks for a measurement now.
+	"""
+	storage(refresh: Boolean! = false): StorageReport!
+	"""
+	Admins: how browsers and apps reach the server and its game streams.
+	"""
+	network: NetworkReport!
+	"""
+	Admins: the server's effective configuration, every setting with where its value came
+	from, credentials masked (as the startup log prints it).
+	"""
+	configuration: [ConfigSetting!]!
+	"""
+	Admins: every shipped core, then any other in the cores folder: version, whether it
+	loads, the systems it plays, and its licence.
+	"""
+	cores: [CoreReport!]!
+	"""
+	Admins: the libretro stable release the image's cores come from.
+	"""
+	libretroRelease: String!
+	"""
+	Admins: the BIOS folder on the server (`SovEmu__Paths__Bios`): each system's files go in
+	the subfolder its `bios.folder` names.
+	"""
+	biosDir: String!
+	"""
+	Admins: where 3D systems render, and every device the startup probe tried.
+	"""
+	gpu: GpuStatus!
+	"""
+	Admins: the background jobs (scans, syncs, lookups, upkeep), and how each last ran.
+	"""
+	jobs: [JobState!]!
+	"""
+	Admins: the latest runs of background jobs, newest first: of one job, or of all.
+	"""
+	jobRuns(job: JobName, limit: Int! = 50): [JobRun!]!
+	"""
+	Admins: the server's host and how much of its CPU and memory is in use.
+	"""
+	serverResources: ServerResources!
+	"""
+	Admins: the container's CPU and memory over a window: the last hour from the readings
+	in memory, longer windows from a row per minute.
+	"""
+	resourceHistory(range: ResourceRange!): ResourceHistory!
+	"""
+	Admins: a system's emulator settings.
+	"""
+	emulatorSettings(system: ID!): EmulatorSettings!
+	"""
+	Diagrams of the player's controllers, by family (`xbox`, `playstation`, `nintendo`,
+	`generic`), keyed by input (`south`, `l1` …).
+	"""
+	controllerLayouts: [PadLayout!]!
+	"""
+	Admins: the default controller mappings every user starts from, and the admin's as
+	environment lines.
+	"""
+	controllerDefaults: ControllerDefaults!
+	"""
+	The controller mappings in force for this user on a system (or, with none, on every
+	system), one per controller model (docs/CONTROLLERS.md): their own for the system, their
+	own for every system, the default for the system, the default for every system. A model
+	missing here uses the clients' built-in defaults.
+	"""
+	controllerMappings(system: ID): [ControllerMapping!]!
+	"""
+	The background to draw behind every screen now: the one chosen, or one at random each
+	time it is asked (`random`); null for none.
+	"""
+	background: Background
+	"""
+	Admins: every background, and the one chosen.
+	"""
+	appearance: AppearanceSettings!
+	"""
+	Admins: the settings that shape every game's stream (bitrates, codec and encoder,
+	keyframes, fast-forward, rewind).
+	"""
+	streaming: StreamingReport!
+	"""
+	Admins: the client errors of the last `days` days, by kind and client, the most frequent
+	first.
+	"""
+	clientEventGroups(days: Int! = 7): [ClientEventGroup!]!
+	"""
+	Admins: one group's client errors in the last `days` days, newest first (at most
+	`limit`, up to 200).
+	"""
+	clientEvents(kind: ClientEventKind!, client: String!, days: Int! = 7, limit: Int! = 50): [ClientEvent!]!
+	"""
+	Admins: the activity log, newest first: one account's (`userId`), one kind of thing
+	(`category`), or all. Up to `limit` (500 at most) a page; pass a page's `next` as `after`
+	for the one after it.
+	"""
+	activity(userId: Int, category: ActivityCategory, after: String, limit: Int! = 100): ActivityPage!
+	"""
+	Admins: what was played over the last week, month or year: totals, plays per day, the
+	most played games, each account's and each system's time, and the most favourited games.
+	"""
+	playStatistics(range: StatsRange!): PlayStatistics!
+	"""
+	Admins: the games (or files) of one kind needing attention, one system's or all, by
+	system and title (at most `limit`, up to 1000).
+	"""
+	gamesNeedingAttention(kind: AttentionKind!, system: ID, limit: Int! = 200): [AttentionItem!]!
+	"""
+	Admins: how many games (or files) of each kind need attention, per system.
+	"""
+	attentionCounts: [AttentionCount!]!
+	"""
+	Admins: the backups kept, and how they are made.
+	"""
+	backups: Backups!
+	"""
+	Admins: the server's recent log, its own lines and its game sessions': the newest
+	`limit` (1000 at most) at `level` and above, of one `session`, holding `text`, after line
+	`after`. Follow it by asking again with the last `cursor`.
+	"""
+	logs(after: Float, level: LogLevel, session: String, text: String, limit: Int! = 300): LogPage!
+}
+
+enum Rendering {
+	GPU
+	SOFTWARE
+	OFF
+}
+
+"""
+A window of CPU and memory history, about 200 buckets per series.
+"""
+type ResourceHistory {
+	"""
+	Unix seconds.
+	"""
+	from: Float!
+	to: Float!
+	"""
+	A bucket's width: a gap wider than this between two points had no readings.
+	"""
+	bucketSeconds: Int!
+	series: [ResourceSeries!]!
+}
+
+"""
+What a series measures.
+"""
+enum ResourceKind {
+	"""
+	A share of the allowed cores.
+	"""
+	CPU
+	"""
+	A share of the memory limit.
+	"""
+	MEMORY
+}
+
+"""
+One bucket of a series, as shares (0–100).
+"""
+type ResourcePoint {
+	"""
+	The bucket's start (Unix seconds).
+	"""
+	at: Float!
+	average: Float!
+	max: Float!
+}
+
+"""
+A chart's window.
+"""
+enum ResourceRange {
+	HOUR
+	DAY
+	WEEK
+	MONTH
+}
+
+type ResourceSeries {
+	resource: ResourceKind!
+	"""
+	Oldest first. A bucket with no readings (the server was down) is absent.
+	"""
+	points: [ResourcePoint!]!
+}
+
+"""
+What an account may do.
+"""
+enum Role {
+	"""
+	Plays games: browse the library, play, keep saves and settings of their own.
+	"""
+	VIEWER
+	"""
+	Also runs the server: users, the library, emulator settings.
+	"""
+	ADMIN
+}
+
+"""
+How many frames a system's pictures run ahead of its games, hiding the games' own input lag:
+a press shows up that many frames sooner. Each frame costs that many more emulated frames.
+"""
+type RunAheadSetting {
+	"""
+	0: off.
+	"""
+	frames: Int!
+	"""
+	The most a system may run ahead.
+	"""
+	max: Int!
+	"""
+	`SOVEMU` when nothing sets it (1 frame on the systems that support it); `ENVIRONMENT` is
+	`SovEmu__Systems__<id>__RunAhead`, which always wins (locked).
+	"""
+	source: SettingSource!
+	"""
+	Whether the system can run ahead at all (the 2D systems).
+	"""
+	supported: Boolean!
+}
+
+type SaveSlot {
+	"""
+	0 is the auto save; 1–9 are the player's.
+	"""
+	slot: Int!
+	"""
+	Unix seconds.
+	"""
+	savedAt: Float!
+	"""
+	The screen when it was saved, if there is one: a URL signed for this user that changes
+	with each save.
+	"""
+	screenshotUrl: String
+}
+
+type ScanReport {
+	found: Int!
+	added: Int!
+	removed: Int!
+}
+
+"""
+The admin Resources page: the host, and the container's latest use.
+"""
+type ServerResources {
+	host: HostFacts!
+	"""
+	Seconds between readings (`SovEmu__SystemResources__SampleSeconds`; 0: not read).
+	"""
+	sampleSeconds: Int!
+	"""
+	The latest reading; null if there is none (see `usageNote`).
+	"""
+	usage: ContainerUsage
+	"""
+	Why there is no reading: sampling is off, it has not run yet, or there is no cgroup to
+	read (outside a container, or on macOS).
+	"""
+	usageNote: String
+	"""
+	When this server process started (Unix seconds): its uptime.
+	"""
+	startedAt: Float!
+}
+
+"""
+A game that failed: the server refused to start it, it failed to start, or it crashed,
+errored or had to be killed while playing. The newest the server keeps
+(`SovEmu__Sessions__FailuresKept`).
+"""
+type SessionFailure {
+	"""
+	When it ended (Unix seconds).
+	"""
+	at: Float!
+	"""
+	Null for an account since deleted.
+	"""
+	username: String
+	gameId: Int!
+	title: String!
+	system: String!
+	"""
+	The core's file name without its extension (`pcsx2_libretro`); null for a start refused
+	before a core was found.
+	"""
+	core: String
+	"""
+	It had loaded: it failed while playing; else while starting.
+	"""
+	whilePlaying: Boolean!
+	"""
+	`refused` (the server would not start it: no core, a missing file, no 3D rendering, every
+	port in use), `error`, `crashed` (a signal: in the core, most often), `killed` (it would
+	not stop, or its start timed out) or `exited` (it left while loading without saying why).
+	"""
+	reason: String!
+	"""
+	What went wrong, in words: why the server refused it, or why its start failed; null for
+	a failure while playing (its last lines say what there is).
+	"""
+	message: String
+	exitCode: Int
+	signal: Int
+	"""
+	The worker's last log lines (the core's own, most often), oldest first.
+	"""
+	lastLines: [String!]!
+	"""
+	How long it ran, seconds.
+	"""
+	ranSeconds: Float!
+}
+
+"""
+A group of settings the emulator declares ("Video", "Audio" …).
+"""
+type SettingCategory {
+	key: String!
+	description: String!
+	info: String!
+}
+
+"""
+A change to one emulator setting.
+"""
+input SettingChange {
+	key: String!
+	"""
+	The new value; null goes back to the default.
+	"""
+	value: String
+}
+
+"""
+Where an emulator setting's value comes from.
+"""
+enum SettingSource {
+	"""
+	The emulator's own default.
+	"""
+	CORE
+	"""
+	SovEmu's default for the system.
+	"""
+	SOVEMU
+	"""
+	Changed by an admin.
+	"""
+	ADMIN
+	"""
+	Set by `SovEmu__Systems__<id>__Options__<name>`, which always wins (locked).
+	"""
+	ENVIRONMENT
+}
+
+"""
+A rounded rectangle; a circle when `r` is half its width and height.
+"""
+type Shape {
+	x: Float!
+	y: Float!
+	w: Float!
+	h: Float!
+	r: Float!
+	"""
+	0 the body, 1 a recess drawn darker (a screen, a stick's well).
+	"""
+	tone: Int!
+}
+
+"""
+Which client holds a sign-in.
+"""
+enum SignInClient {
+	"""
+	The web client, in a browser.
+	"""
+	WEB
+	"""
+	The Android or iOS app (a phone, a tablet, a TV).
+	"""
+	APP
+	OTHER
+}
+
+"""
+A browser or app signed in as an account: it holds a refresh token, and can be signed out
+on its own (`endSignIn`).
+"""
+type SignInNode {
+	id: ID!
+	userId: Int
+	"""
+	The account's name; null if it has gone.
+	"""
+	username: String
+	client: SignInClient!
+	"""
+	When it signed in, as a Unix time in seconds.
+	"""
+	signedInAt: Float!
+	"""
+	When it last renewed its access: about when it was last in use (Unix seconds).
+	"""
+	lastUsedAt: Float!
+	"""
+	When it lapses unless used again (Unix seconds); null for none.
+	"""
+	expiresAt: Float
+	"""
+	What the app calls its device (`nameDevice`); null for a browser, or an app that has not
+	said.
+	"""
+	device: String
+	"""
+	What its device says it can decode and show, from its latest `sessionOffer`; null until
+	it has started a stream with one, or if what is kept is of another version.
+	"""
+	capabilities: ClientCapabilities
+}
+
+"""
+What a game start is doing.
+"""
+enum StartPhase {
+	"""
+	Saving and stopping the player's previous session.
+	"""
+	STOPPING
+	"""
+	Starting the emulator's process.
+	"""
+	LAUNCHING
+	"""
+	Opening the emulator.
+	"""
+	CORE
+	"""
+	Reading the game.
+	"""
+	CONTENT
+	READY
+	FAILED
+}
+
+"""
+How far a game start has got, for a loading bar.
+"""
+type StartStatus {
+	phase: StartPhase!
+	"""
+	Bytes read so far in this phase, where known.
+	"""
+	read: Float
+	"""
+	Bytes this phase will read, when known.
+	"""
+	total: Float
+	"""
+	Since the start began.
+	"""
+	elapsedMs: Float!
+	"""
+	Since this phase began.
+	"""
+	phaseMs: Float!
+	error: String
+}
+
+"""
+The window the figures cover, ending now.
+"""
+enum StatsRange {
+	WEEK
+	MONTH
+	YEAR
+}
+
+"""
+One of the player's analog sticks.
+"""
+enum Stick {
+	LEFT
+	RIGHT
+}
+
+type StorageArea {
+	"""
+	`database`, `saves`, `cache`, `discs`, `mirror`, `artwork` (downloaded game art),
+	`your_artwork` (the rest of `artwork/`: backgrounds, photos, decorations, icons),
+	`artwork_widths`, `metadata`, `builtin_artwork`, `roms`, `bios`, `backups` or `other`.
+	"""
+	id: String!
+	path: String!
+	bytes: Float!
+	files: Float!
+}
+
+"""
+Where the data folder's space goes.
+"""
+type StorageReport {
+	"""
+	When it was measured (Unix seconds): measurements are kept a few minutes.
+	"""
+	measuredAt: Float!
+	dataDir: String!
+	"""
+	The parts of the data folder, largest first. `other` is what no part claims.
+	"""
+	areas: [StorageArea!]!
+	"""
+	Each user's saves, largest first.
+	"""
+	saves: [UserStorage!]!
+	"""
+	The data folder's filesystem, in bytes.
+	"""
+	totalBytes: Float
+	freeBytes: Float
+	"""
+	`cache` mode: the cache's cap, in bytes (`SovEmu__Library__Cache__MaxGigabytes`).
+	"""
+	cacheLimitBytes: Float
+}
+
+"""
+A session's last `session health` interval.
+"""
+type StreamHealth {
+	"""
+	Frames shown per second.
+	"""
+	fps: Float!
+	"""
+	The share of frames that took longer than a frame period, 0 to 1.
+	"""
+	overran: Float!
+	"""
+	The share of the interval the game was paused (the player's menu open), 0 to 1.
+	"""
+	paused: Float!
+	tickMeanMs: Float!
+	encodeMeanMs: Float!
+	"""
+	Inside the core, per frame it ran (run-ahead's included).
+	"""
+	coreMeanMs: Float!
+	"""
+	Reading a GPU frame back, per frame the core ran (0 for cores that draw on the CPU).
+	"""
+	readbackMeanMs: Float!
+	"""
+	What the encoder produced, and what it aimed for, kbit/s.
+	"""
+	videoKbps: Float!
+	videoKbpsTarget: Int!
+	"""
+	The send-bandwidth estimate, kbit/s.
+	"""
+	estimateKbps: Float
+}
+
+"""
+How a session's stream is made: what draws the picture, the video codec and encoder (and
+any encoder it fell back from), the audio, and run-ahead.
+"""
+type StreamPipeline {
+	"""
+	The OpenGL renderer a 3D core draws with; null for a core that draws on the CPU.
+	"""
+	renderer: String
+	"""
+	The renderer is the software one (llvmpipe), not a GPU.
+	"""
+	rendererSoftware: Boolean!
+	"""
+	`h264` or `vp8`.
+	"""
+	videoCodec: String!
+	"""
+	`vaapi`, `nvenc`, `x264` or `libvpx`.
+	"""
+	videoEncoder: String!
+	"""
+	The encoder runs on a GPU.
+	"""
+	videoHardware: Boolean!
+	"""
+	Encoders given up before this one, in order, with why.
+	"""
+	fallbacks: [EncoderFallback!]!
+	width: Int!
+	height: Int!
+	fps: Float!
+	"""
+	`opus`.
+	"""
+	audioCodec: String!
+	"""
+	The core's own sample rate, resampled to 48 kHz.
+	"""
+	audioSourceHz: Float!
+	audioKbps: Int!
+	"""
+	Frames the picture runs ahead of the game (0: off).
+	"""
+	runAhead: Int!
+}
+
+"""
+What the Streaming page shows.
+"""
+type StreamingReport {
+	"""
+	The settings that shape a game's stream, as the Configuration page shows them.
+	"""
+	settings: [ConfigSetting!]!
+	"""
+	How long a connection test stays up, connected or not.
+	"""
+	testSeconds: Int!
+	"""
+	What the startup encoder test found on this host.
+	"""
+	encoderTest: EncoderTest!
+}
+
+type System {
+	id: ID!
+	"""
+	What the system calls its buttons, and a diagram of its pad (docs/CONTROLLERS.md).
+	"""
+	controls: SystemControls!
+	name: String!
+	"""
+	A short label for tight spaces ("SNES").
+	"""
+	short: String!
+	manufacturer: String!
+	year: Int!
+	"""
+	The UI accent colour (CSS).
+	"""
+	color: String!
+	"""
+	A photo of its hardware for its card (a transparent cut-out): SovEmu's, or the admin's own
+	from `<data>/systems/<id>.webp`. A URL signed for this user; null when it has none.
+	"""
+	photoUrl: String
+	gameCount: Int!
+	"""
+	A core that plays it is installed (and, for a 3D system, there is a renderer).
+	"""
+	playable: Boolean!
+	"""
+	A 3D system: its cores render with OpenGL and read analog sticks.
+	The shape of its games' boxes, width over height (US and European releases): game cards
+	take it so box art fills them.
+	"""
+	boxAspect: Float!
+	needsGpu: Boolean!
+	"""
+	For a 3D system, where it renders here.
+	"""
+	rendering: Rendering
+	"""
+	A BIOS file it cannot start games without is missing. Cheap: no checksums (see `bios`).
+	"""
+	biosMissing: Boolean!
+	"""
+	Its BIOS files, checked by name and MD5; null for a system that uses none.
+	"""
+	bios: SystemBios
+	"""
+	Its games, by title.
+	"""
+	games: [Game!]!
+}
+
+type SystemBios {
+	state: BiosState!
+	"""
+	The folder SovEmu recommends for the system's files, relative to the server's BIOS folder
+	(`SovEmu__Paths__Bios`). Files are found in any layout; this one keeps them tidy.
+	"""
+	folder: String!
+	groups: [BiosGroup!]!
+}
+
+"""
+One of a system's buttons: the RetroPad button that drives it and what the console calls it.
+"""
+type SystemButton {
+	button: PadButton!
+	label: String!
+}
+
+"""
+A system's buttons, its analog controls and its pad's diagram.
+"""
+type SystemControls {
+	"""
+	The buttons the system's pad has, in the order to list them.
+	"""
+	buttons: [SystemButton!]!
+	"""
+	The analog controls the system's core reads from the player's sticks, in the order to
+	list them after the buttons; empty for a system without them.
+	"""
+	sticks: [SystemStick!]!
+	layout: PadLayout!
+}
+
+type SystemDecoration {
+	system: System!
+	"""
+	The set (`none`: no frame).
+	"""
+	set: String!
+	"""
+	Chosen for this system (`SovEmu__Systems__<id>__Decoration`) rather than the default.
+	"""
+	perSystem: Boolean!
+	"""
+	What its games are framed with when they have no image of their own. None for `none`,
+	or a set that isn't there.
+	"""
+	preview: Decoration
+}
+
+"""
+A system's plays in the window.
+"""
+type SystemPlays {
+	system: String!
+	sessions: Int!
+	seconds: Float!
+	players: Int!
+}
+
+"""
+One of a system's analog controls: the player's stick that drives it (always the same one:
+sticks are not remapped), what the console calls it, and the key on the system's diagram it
+lights.
+"""
+type SystemStick {
+	stick: Stick!
+	label: String!
+	key: String!
+}
+
+"""
+OpenTelemetry export: whether it is on, where to, and how it has gone.
+"""
+type TelemetryReport {
+	"""
+	`SovEmu__Telemetry__Otlp__Endpoint` is set: traces and metrics are exported.
+	"""
+	enabled: Boolean!
+	"""
+	The collector, credentials masked.
+	"""
+	endpoint: String
+	"""
+	`text` or `json` (`SovEmu__Logging__Format`).
+	"""
+	logFormat: String!
+	"""
+	`OTEL_SERVICE_NAME`, else SovEmu's.
+	"""
+	serviceName: String!
+	"""
+	How often metrics are sent (`OTEL_METRIC_EXPORT_INTERVAL`), milliseconds.
+	"""
+	metricIntervalMs: Float!
+	"""
+	The headers sent with each export (`OTEL_EXPORTER_OTLP_HEADERS`), by name only.
+	"""
+	headerNames: [String!]!
+	traces: ExportResult!
+	metrics: ExportResult!
+	"""
+	The settings this page is about, as the Configuration page shows them.
+	"""
+	settings: [ConfigSetting!]!
+}
+
+"""
+A video encoder the startup test ran, exactly as a game's session would run it.
+"""
+type TestedEncoder {
+	"""
+	`vp8` or `h264`.
+	"""
+	codec: String!
+	"""
+	`libvpx`, `vaapi`, `nvenc` or `x264`.
+	"""
+	encoder: String!
+	"""
+	It encodes on a GPU.
+	"""
+	hardware: Boolean!
+	"""
+	CPU threads a frame is encoded on; null for a GPU's encoder.
+	"""
+	threads: Int
+	"""
+	It encoded every frame it was given, as it was given it, within its share of the time.
+	"""
+	works: Boolean!
+	"""
+	Why it does not work: it did not open, failed, held frames back, or ran out of time.
+	"""
+	error: String
+	"""
+	A row for each picture size it finished, smallest first.
+	"""
+	timings: [EncoderTiming!]!
+}
+
+"""
+The open-source packages SovEmu ships, with their licences.
+"""
+type ThirdPartyNotices {
+	"""
+	The server's and the workers' Rust crates (cargo-about, at the image's build).
+	"""
+	server: [Notice!]!
+	"""
+	The web client's npm packages (its build); empty for a development build.
+	"""
+	web: [Notice!]!
+}
+
+"""
+An account.
+"""
+type User {
+	id: Int!
+	username: String!
+	role: Role!
+	"""
+	Whether the role is `ADMIN`.
+	"""
+	isAdmin: Boolean!
+	"""
+	The environment declares it (`SovEmu__Authentication__AdminUsername`, `SovEmu__Users__<n>__…`) and sets
+	it again at every start: its role and password are changed there, and it is not removed
+	here.
+	"""
+	declared: Boolean!
+}
+
+"""
+One account, as the admin's user page shows it.
+"""
+type UserDetails {
+	user: User!
+	"""
+	When it was created (UTC, `YYYY-MM-DD HH:MM:SS`).
+	"""
+	joinedAt: String
+	"""
+	Every browser and app signed in as it, the most recently used first.
+	"""
+	signIns: [SignInNode!]!
+	"""
+	Different games it has started, and starts in all.
+	"""
+	gamesPlayed: Int!
+	starts: Int!
+	"""
+	Its latest game start (UTC, `YYYY-MM-DD HH:MM:SS`); null if none yet.
+	"""
+	lastPlayedAt: String
+	"""
+	Its battery saves and states on disk: bytes (a Float: it can pass 2 GiB) and files.
+	"""
+	saveBytes: Float!
+	saveFiles: Int!
+}
+
+type UserStorage {
+	userId: Int!
+	"""
+	Null for a user that has been deleted (their saves are left behind).
+	"""
+	username: String
+	bytes: Float!
+	files: Float!
+}
+
+"""
+A video codec a client may decode. The worker encodes VP8 and H.264 today; the rest are
+named so a client's document need not change when their encoders arrive.
+"""
+enum VideoCodec {
+	VP8
+	H264
+	VP9
+	AV1
+	H265
+}
+
+"""
+How a client decodes one codec: the decoder it would use for a game's stream.
+"""
+type VideoDecoder {
+	codec: VideoCodec!
+	"""
+	The device's hardware decodes it; false for a decoder that runs on the CPU.
+	"""
+	hardware: Boolean!
+	"""
+	The decoder hands over each frame as soon as it is decoded, holding none back.
+	"""
+	lowLatency: Boolean!
+	"""
+	The decoder's own name (`c2.amlogic.avc.decoder`, `libvpx`), for logs and the admin's
+	view: nothing is decided from it. Kept to 80 characters.
+	"""
+	name: String
+}
+
+"""
+How a client decodes one codec: the decoder it would use for a game's stream.
+"""
+input VideoDecoderInput {
+	codec: VideoCodec!
+	"""
+	The device's hardware decodes it; false for a decoder that runs on the CPU.
+	"""
+	hardware: Boolean!
+	"""
+	The decoder hands over each frame as soon as it is decoded, holding none back.
+	"""
+	lowLatency: Boolean!
+	"""
+	The decoder's own name (`c2.amlogic.avc.decoder`, `libvpx`), for logs and the admin's
+	view: nothing is decided from it. Kept to 80 characters.
+	"""
+	name: String
+}
+
+type Viewer {
+	"""
+	No account exists yet: the client should offer first-run setup.
+	"""
+	setupRequired: Boolean!
+	"""
+	The signed-in user, if any.
+	"""
+	user: User
+}
+
+"""
+Marks an element of a GraphQL schema as no longer supported.
+"""
+directive @deprecated(reason: String = "No longer supported") on FIELD_DEFINITION | ARGUMENT_DEFINITION | INPUT_FIELD_DEFINITION | ENUM_VALUE
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	mutation: Mutation
+}

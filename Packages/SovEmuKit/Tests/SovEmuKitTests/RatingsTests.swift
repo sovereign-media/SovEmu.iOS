@@ -33,51 +33,23 @@ struct RatingsTests {
         #expect(formatRating(nil) == nil)
     }
 
-    private func decode(_ json: String) throws -> Game {
-        try JSONDecoder().decode(Game.self, from: Data(json.utf8))
+    /// A game as the server sends it, read through the API.
+    private func game(_ extra: String) async throws -> Game {
+        let stub = Stub { _, _ in (200, #"{"data":{"search":["# + APITests.game(id: 7, extra: extra) + "]}}") }
+        return try #require(try await SovEmuAPI(baseURL: stub.base, session: stub.session).search("c").first)
     }
 
-    @Test func aGameDecodesItsRatingAndLists() throws {
-        let game = try decode(##"""
-            {"id": 7, "system": "nes", "title": "Castlevania", "rating": 0.8, "esrb": "EVERYONE_10_PLUS",
-             "esrbBadgeUrl": "/media/decorations/sovemu/ratings/esrb/e10.png?Sov-UserId=1",
-             "modes": ["Single player"], "series": ["Castlevania"], "themes": ["Horror", "Fantasy"],
-             "genres": ["Platform", "Action"], "genre": "Platform, Action"}
-            """##)
+    @Test func aGameReadsItsRatingAndLists() async throws {
+        let game = try await game(##""rating":0.8,"esrb":"EVERYONE_10_PLUS","esrbBadgeUrl":"/media/decorations/sovemu/ratings/esrb/e10.png?Sov-UserId=1","modes":["Single player"],"series":["Castlevania"],"themes":["Horror"],"genres":["Platform"],"genre":"Platform""##)
         #expect(game.esrb == .everyone10Plus)
         #expect(game.esrbBadgeUrl == "/media/decorations/sovemu/ratings/esrb/e10.png?Sov-UserId=1")
         #expect(game.rating == 0.8)
-        #expect(game.modes == ["Single player"])
-        #expect(game.series == ["Castlevania"])
-        #expect(game.themes == ["Horror", "Fantasy"])
-        #expect(game.genres == ["Platform", "Action"])
+        #expect(game.modes == ["Single player"] && game.series == ["Castlevania"])
+        #expect(game.themes == ["Horror"] && game.genres == ["Platform"])
     }
 
-    @Test func anOlderServersGameDecodesWithoutThem() throws {
-        let game = try decode(##"{"id": 7, "system": "nes", "title": "Castlevania"}"##)
-        #expect(game.esrb == nil && game.esrbBadgeUrl == nil)
-        #expect(game.modes.isEmpty && game.series.isEmpty && game.themes.isEmpty && game.genres.isEmpty)
-        #expect(try decode(##"{"id": 7, "system": "nes", "title": "C", "esrb": null}"##).esrb == nil)
-    }
-
-    @Test func anUnknownRatingIsNoRating() throws {
-        let game = try decode(##"{"id": 7, "system": "nes", "title": "Castlevania", "esrb": "PEGI_99", "modes": ["Co-op"]}"##)
-        #expect(game.esrb == nil)
-        #expect(game.modes == ["Co-op"])
-    }
-
-    @Test func theGameFieldsAskForTheNewFields() {
-        #expect(Game.fields.contains("rating esrb esrbBadgeUrl modes series themes genres"))
-    }
-
-    @Test func homeAsksForTopRated() throws {
-        #expect(Documents.home.contains("topRated {"))
-        let rows = try JSONDecoder().decode(HomeRows.self, from: Data(##"""
-            {"featured": [], "recent": [], "added": [], "favourites": [],
-             "topRated": [{"id": 1, "system": "snes", "title": "Chrono Trigger", "rating": 0.95}]}
-            """##.utf8))
-        #expect(rows.topRated.map(\.id) == [1])
-        let older = try JSONDecoder().decode(HomeRows.self, from: Data(##"{"featured": [], "recent": [], "added": [], "favourites": []}"##.utf8))
-        #expect(older.topRated.isEmpty)
+    @Test func anUnknownRatingIsNoRating() async throws {
+        #expect(try await game(##""esrb":"PEGI_99""##).esrb == nil)
+        #expect(try await game(##""esrb":null"##).esrb == nil)
     }
 }

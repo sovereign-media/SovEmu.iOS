@@ -21,11 +21,12 @@ struct ArtworkTests {
         #expect(artFills(.nan, 1.4))
     }
 
-    @Test func systemsSayTheirBoxShape() throws {
-        let json = ##"{"id":"snes","name":"Super Nintendo","short":"SNES","manufacturer":"Nintendo","year":1990,"color":"#000","gameCount":1,"playable":true,"needsGpu":false,"boxAspect":1.4}"##
-        let snes = try JSONDecoder().decode(SystemSummary.self, from: Data(json.utf8))
+    @Test func systemsSayTheirBoxShape() async throws {
+        let stub = Stub { _, _ in
+            (200, ##"{"data":{"systems":[{"id":"snes","name":"Super Nintendo","short":"SNES","manufacturer":"Nintendo","year":1990,"color":"#000","gameCount":1,"playable":true,"needsGpu":false,"rendering":null,"biosMissing":false,"boxAspect":1.4}]}}"##)
+        }
+        let snes = try #require(try await SovEmuAPI(baseURL: stub.base, session: stub.session).systems().first)
         #expect(snes.boxAspect == 1.4)
-        let older = try JSONDecoder().decode(SystemSummary.self, from: Data(json.replacingOccurrences(of: #","boxAspect":1.4"#, with: "").utf8))
-        #expect(older.boxAspect == defaultBoxAspect, "an older server: the old portrait card")
+        #expect(SystemSummary(id: "x", name: "X", short: "X").boxAspect == defaultBoxAspect, "the portrait card by default")
     }
 }

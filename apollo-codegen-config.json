@@ -1,0 +1,31 @@
+{
+  "schemaNamespace" : "SovEmuGraphQL",
+  "input" : {
+    "operationSearchPaths" : [
+      "Packages/SovEmuKit/Sources/SovEmuKit/GraphQL/**/*.graphql"
+    ],
+    "schemaSearchPaths" : [
+      "Packages/SovEmuKit/Sources/SovEmuKit/GraphQL/schema.graphqls"
+    ]
+  },
+  "output" : {
+    "testMocks" : {
+      "none" : {}
+    },
+    "schemaTypes" : {
+      "path" : "./Packages/SovEmuKit/Sources/SovEmuKit/Generated",
+      "moduleType" : {
+        "embeddedInTarget" : {
+          "name" : "SovEmuKit",
+          "accessModifier" : "internal"
+        }
+      }
+    },
+    "operations" : {
+      "inSchemaModule" : {}
+    }
+  },
+  "options" : {
+    "pruneGeneratedFiles" : true
+  }
+}

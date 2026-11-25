@@ -344,8 +344,8 @@ struct ControllersTests {
         #expect(DiagramHighlight(button: nil, mapping: .pad) == DiagramHighlight(button: nil, mapping: .keyboard))
     }
 
-    @Test func listsTheSystemsButtonsForThisSystemAndAllSixteenOtherwise() throws {
-        let info = try SovEmuAPI.decodeData(ControlsInfo.self, from: Data(Fixtures.megadriveControls.utf8), status: 200)
+    @Test func listsTheSystemsButtonsForThisSystemAndAllSixteenOtherwise() async throws {
+        let info = try await Fixtures.megadriveInfo()
         let here = remapButtons(info.controls, scope: .system("megadrive"))
         #expect(here.count == 12)
         #expect(here.first { $0.button == "A" }?.label == "C")
