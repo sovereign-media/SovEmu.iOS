@@ -40,13 +40,9 @@ final class GameMenu {
         let button: RetroButton
         /// The button as the row names it ("C").
         let label: String
-        let started = Date()
 
-        var cancelInput: String { identity.isKeyboard ? KeyNames.menu : PadInput.east.rawValue }
     }
 
-    static let captureTimeout: TimeInterval = 8
-    static let holdToBind: TimeInterval = 1
 
     /// What the device page draws above its rows.
     struct Diagrams {
@@ -77,11 +73,10 @@ final class GameMenu {
     @ObservationIgnored var api: SovEmuAPI?
     @ObservationIgnored var flash: (String) -> Void = { _ in }
     @ObservationIgnored private var watchers: [Controller.DeviceKey: PressWatcher] = [:]
-    /// New presses on the device being captured (polled every frame, so not observed).
-    @ObservationIgnored private var captureWatcher = PressWatcher()
-    /// When the capture's cancel input (east, or Escape on a keyboard) went down: a tap
-    /// cancels, holding it binds it.
-    @ObservationIgnored private var cancelDown: Date?
+    /// The wait for an input to bind, with its timing (SovEmuKit's `RebindCapture`, as Android's).
+    @ObservationIgnored private var rebind: RebindCapture?
+    /// Milliseconds on a monotonic clock, for `rebind`.
+    @ObservationIgnored var nowMs: () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) }
 
     init(controller: Controller) {
         self.controller = controller
@@ -226,8 +221,10 @@ final class GameMenu {
 
     func startCapture(_ device: Controller.Device, _ button: RetroButton, label: String) {
         let held = controller.held()[device.key] ?? []
-        captureWatcher = PressWatcher(holding: held)
-        cancelDown = nil
+        let isKeyboard = device.identity.isKeyboard
+        rebind = RebindCapture(
+            back: RebindCapture.backInput(isKeyboard: isKeyboard), alreadyHeld: held, startMs: nowMs(),
+            bindable: { isKeyboard ? KeyNames.bindable($0) : PadInput(rawValue: $0) != nil })
         capture = Capture(device: device.key, identity: device.identity, button: button, label: label)
     }
 
@@ -336,38 +333,20 @@ final class GameMenu {
             return
         }
         // Escape on a keyboard, or Home on the pad, always cancels.
+        var guide = false
         if !capture.identity.isKeyboard {
             let keys = all[.keyboard] ?? []
             var keyboard = watchers[.keyboard] ?? PressWatcher(holding: keys)
-            let escape = keyboard.pressed(keys).contains(KeyNames.menu)
+            guide = keyboard.pressed(keys).contains(KeyNames.menu) || held.contains("home")
             watchers[.keyboard] = keyboard
-            if escape || held.contains("home") {
-                cancelCapture()
-                return
-            }
         }
-        if Date().timeIntervalSince(capture.started) > Self.captureTimeout && cancelDown == nil {
-            cancelCapture()
-            return
-        }
-        var pressed = captureWatcher.pressed(held)
-        let cancel = capture.cancelInput
-        if pressed.remove(cancel) != nil { cancelDown = Date() }
-        if let down = cancelDown {
-            if !held.contains(cancel) {
-                cancelCapture()
-                return
-            }
-            if Date().timeIntervalSince(down) >= Self.holdToBind {
-                bind(cancel, capture)
-                return
-            }
-        }
-        let bindable = pressed.filter { input in
-            capture.identity.isKeyboard ? KeyNames.bindable(input) : PadInput(rawValue: input) != nil
-        }
-        if let input = bindable.sorted().first {
-            bind(input, capture)
+        guard var rebind else { return }
+        let outcome = rebind.update(held: held, nowMs: nowMs(), guide: guide)
+        self.rebind = rebind
+        switch outcome {
+        case .waiting: break
+        case .bind(let input): bind(input, capture)
+        case .cancel: cancelCapture()
         }
     }
 }
