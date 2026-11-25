@@ -14,6 +14,8 @@ struct ConnectView: View {
     @State private var busy = false
     /// The server's `bootstrapConfig` for the address in the field, once it has answered.
     @State private var connected: BootstrapConfig?
+    /// Signing in with a code, asked for (a server with no password sign-in offers only that).
+    @State private var pairingAsked = false
 
     var body: some View {
         ZStack {
@@ -24,19 +26,35 @@ struct ConnectView: View {
                 TextField("Server address (http://192.168.1.20:8080)", text: $server)
                     .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     .onChange(of: server) { _, address in
-                        if address != model.serverURL { connected = nil }
+                        if address != model.serverURL {
+                            connected = nil
+                            pairingAsked = false
+                        }
                     }
                 if let connected, let problem = connected.signInProblem {
                     // No form: this app cannot sign in here (yet).
                     Text(problem).font(.callout)
                     Button(busy ? "Connecting…" : "Try again") { Task { await connect() } }
                         .buttonStyle(.bordered).disabled(busy).frame(maxWidth: .infinity)
-                } else if connected != nil {
+                } else if let connected, let api = model.api,
+                          connected.canPair && (pairingAsked || !connected.canUsePassword) {
+                    PairingView(
+                        api: api,
+                        onSignedIn: { model.signedInAnew() },
+                        onUsePassword: connected.canUsePassword ? { pairingAsked = false } : nil)
+                } else if let connected {
                     TextField("Username", text: $username)
                         .textContentType(.username).textInputAutocapitalization(.never).autocorrectionDisabled()
                     SecureField("Password", text: $password).textContentType(.password)
                     Button(busy ? "Signing in…" : "Sign in") { Task { await signIn() } }
                         .buttonStyle(.borderedProminent).disabled(busy).frame(maxWidth: .infinity)
+                    // The other way in, as on Sovereign's TVs: a code to approve elsewhere.
+                    if connected.canPair {
+                        Button { pairingAsked = true; error = nil } label: {
+                            Label(PairingText.useCode, systemImage: "iphone").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered).disabled(busy)
+                    }
                 } else {
                     Button(busy ? "Connecting…" : "Connect") { Task { await connect() } }
                         .buttonStyle(.borderedProminent).disabled(busy).frame(maxWidth: .infinity)

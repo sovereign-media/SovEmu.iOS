@@ -4,10 +4,12 @@ import Synchronization
 import Security
 #endif
 
-// MARK: - Sign-in: the server's OAuth 2 endpoints, as its native (public) client
+// MARK: - Sign-in: the server's OAuth 2 endpoints, as its device (public) client
 //
 // Where to sign in comes from the server's `bootstrapConfig` (`SignInEndpoints`): the app
-// hard-codes no path but `/graphql`. Sign in with a password (its `passwordEndpoint`), keep the access token in memory and the refresh token in a
+// hard-codes no path but `/graphql`. Sign in with a code approved on another screen (the device
+// grant, `DevicePairing.swift`) or with a password (its `passwordEndpoint`), keep the access
+// token in memory and the refresh token in a
 // `RefreshTokenStore` (the Keychain in the app). Refresh tokens rotate: every refresh returns a
 // new one, which replaces the old. "Signed in" means a refresh token is stored.
 
@@ -108,9 +110,12 @@ public struct SignInEndpoints: Codable, Sendable, Equatable {
     public let revocation: URL?
     /// Nil when the server has turned password sign-in off.
     public let password: URL?
+    /// Where to ask for a code to show (RFC 8628); nil from a server that offers none.
+    public let deviceAuthorization: URL?
 
-    public init(clientId: String, token: URL, revocation: URL?, password: URL?) {
+    public init(clientId: String, token: URL, revocation: URL?, password: URL?, deviceAuthorization: URL? = nil) {
         (self.clientId, self.token, self.revocation, self.password) = (clientId, token, revocation, password)
+        self.deviceAuthorization = deviceAuthorization
     }
 }
 
@@ -187,6 +192,79 @@ public actor TokenClient {
         refreshing = nil
         accept(tokens)
     }
+
+    /// Asks the server for a code to show (RFC 8628 device authorization). Throws `AuthError`
+    /// when refused, and a network failure as it is.
+    public func requestDeviceCode() async throws -> DeviceCode {
+        guard let endpoints else { throw AuthError.notConfigured }
+        guard let url = endpoints.deviceAuthorization else {
+            throw AuthError(status: 0, code: "unsupported_grant_type", message: "This server does not sign in with a code.")
+        }
+        let (data, response) = try await session.data(for: Self.formRequest(url, [("client_id", endpoints.clientId), ("scope", Self.scope)]))
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        struct Answer: Decodable {
+            let device_code: String, user_code: String, verification_uri: String
+            let verification_uri_complete: String?, expires_in: Double, interval: Double?
+        }
+        guard (200..<300).contains(status), let answer = try? JSONDecoder().decode(Answer.self, from: data) else {
+            if let failure = try? JSONDecoder().decode(OAuthErrorBody.self, from: data) {
+                throw AuthError(status: status, code: failure.error, message: failure.error_description)
+            }
+            throw AuthError(status: status, code: "invalid_response", message: "The server sent no code to show.")
+        }
+        return DeviceCode(
+            deviceCode: answer.device_code, userCode: answer.user_code, verificationURI: answer.verification_uri,
+            verificationURIComplete: answer.verification_uri_complete, expiresIn: answer.expires_in,
+            interval: answer.interval ?? DeviceCode.defaultInterval)
+    }
+
+    /// Asks the token endpoint whether `code` has been approved: one device_code grant. When it
+    /// has, the tokens are kept (signed in) before this returns `.approved`. Never throws but for
+    /// cancellation: a request that got no answer is `.noAnswer`, and the next poll is the retry.
+    public func pollDeviceCode(_ code: DeviceCode) async throws -> DevicePoll {
+        guard let endpoints else { return .refused(.failed) }
+        let request = Self.formRequest(endpoints.token, [
+            ("grant_type", Self.deviceCodeGrant), ("client_id", endpoints.clientId), ("device_code", code.deviceCode),
+        ])
+        let data: Data, status: Int
+        do {
+            let (body, response) = try await session.data(for: request)
+            (data, status) = (body, (response as? HTTPURLResponse)?.statusCode ?? 0)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return .noAnswer
+        }
+        let answer = Self.devicePoll(data, status: status)
+        if case .approved = answer, let tokens = try? Self.readToken(data, status: status) {
+            generation += 1
+            refreshing = nil
+            accept(tokens)
+        }
+        return answer
+    }
+
+    /// What the token endpoint's answer to a device_code grant means.
+    static func devicePoll(_ data: Data, status: Int) -> DevicePoll {
+        if (200..<300).contains(status) {
+            guard let tokens = try? readToken(data, status: 200), tokens.refresh_token != nil else { return .refused(.failed) }
+            return .approved
+        }
+        if status == 429 { return .slowDown }
+        switch (try? JSONDecoder().decode(OAuthErrorBody.self, from: data))?.error {
+        // On every poll until someone approves: waiting, not a failure.
+        case "authorization_pending": return .pending
+        case "slow_down": return .slowDown
+        case "expired_token": return .refused(.expired)
+        case "access_denied": return .refused(.denied)
+        default: return status >= 500 ? .noAnswer : .refused(.failed)
+        }
+    }
+
+    /// RFC 8628's grant type, polled at the token endpoint.
+    static let deviceCodeGrant = "urn:ietf:params:oauth:grant-type:device_code"
 
     /// A current access token, refreshed first when it has under a minute left; nil when
     /// signed out.

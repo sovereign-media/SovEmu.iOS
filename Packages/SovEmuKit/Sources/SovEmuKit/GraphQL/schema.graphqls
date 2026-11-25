@@ -530,9 +530,24 @@ type BootstrapConfig {
 	"""
 	webClientId: String
 	"""
-	The apps' id: the device grant, and the password fallback.
+	The devices' id: the device grant (a code shown on the screen and approved at
+	`verificationUri`), and the password fallback. A TV signs in as it, and so does an app
+	signing in with a code or a password.
 	"""
-	nativeClientId: String
+	deviceClientId: String
+	"""
+	The phone and tablet apps' id for signing in through the system browser: the
+	authorization code flow with PKCE, back to `mobileRedirectUri`.
+	"""
+	mobileClientId: String
+	"""
+	Where the mobile client's sign-in comes back to, the apps' own scheme.
+	"""
+	mobileRedirectUri: String
+	"""
+	The device client's id, by its old name.
+	"""
+	nativeClientId: String @deprecated(reason: "Use deviceClientId.")
 	authorizationEndpoint: String
 	tokenEndpoint: String
 	revocationEndpoint: String

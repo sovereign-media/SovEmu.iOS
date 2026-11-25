@@ -137,7 +137,8 @@ query Bootstrap {
     address
     issuer
     webClientId
-    nativeClientId
+    # The client the app signs in as, with a code or a password.
+    deviceClientId
     authorizationEndpoint
     tokenEndpoint
     revocationEndpoint

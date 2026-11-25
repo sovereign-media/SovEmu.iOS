@@ -30,7 +30,7 @@ extension BootstrapConfig {
     init(_ c: SovEmuGraphQL.BootstrapQuery.Data.BootstrapConfig) {
         self.init(
             signInAvailable: c.signInAvailable, address: c.address, issuer: c.issuer, webClientId: c.webClientId,
-            nativeClientId: c.nativeClientId, authorizationEndpoint: c.authorizationEndpoint,
+            deviceClientId: c.deviceClientId, authorizationEndpoint: c.authorizationEndpoint,
             tokenEndpoint: c.tokenEndpoint, revocationEndpoint: c.revocationEndpoint, deviceAuthorizationEndpoint: c.deviceAuthorizationEndpoint,
             verificationUri: c.verificationUri, passwordEndpoint: c.passwordEndpoint)
     }

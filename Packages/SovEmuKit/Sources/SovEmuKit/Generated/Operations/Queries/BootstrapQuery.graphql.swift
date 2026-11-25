@@ -9,7 +9,7 @@ extension SovEmuGraphQL {
     static let operationName: String = "Bootstrap"
     static let operationDocument: ApolloAPI.OperationDocument = .init(
       definition: .init(
-        #"query Bootstrap { bootstrapConfig { __typename signInAvailable address issuer webClientId nativeClientId authorizationEndpoint tokenEndpoint revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint } }"#
+        #"query Bootstrap { bootstrapConfig { __typename signInAvailable address issuer webClientId deviceClientId authorizationEndpoint tokenEndpoint revocationEndpoint deviceAuthorizationEndpoint verificationUri passwordEndpoint } }"#
       ))
 
     public init() {}
@@ -44,7 +44,7 @@ extension SovEmuGraphQL {
           .field("address", String.self),
           .field("issuer", String?.self),
           .field("webClientId", String?.self),
-          .field("nativeClientId", String?.self),
+          .field("deviceClientId", String?.self),
           .field("authorizationEndpoint", String?.self),
           .field("tokenEndpoint", String?.self),
           .field("revocationEndpoint", String?.self),
@@ -66,8 +66,10 @@ extension SovEmuGraphQL {
         var issuer: String? { __data["issuer"] }
         /// The web client's id: the authorization code flow with PKCE.
         var webClientId: String? { __data["webClientId"] }
-        /// The apps' id: the device grant, and the password fallback.
-        var nativeClientId: String? { __data["nativeClientId"] }
+        /// The devices' id: the device grant (a code shown on the screen and approved at
+        /// `verificationUri`), and the password fallback. A TV signs in as it, and so does an app
+        /// signing in with a code or a password.
+        var deviceClientId: String? { __data["deviceClientId"] }
         var authorizationEndpoint: String? { __data["authorizationEndpoint"] }
         var tokenEndpoint: String? { __data["tokenEndpoint"] }
         var revocationEndpoint: String? { __data["revocationEndpoint"] }
