@@ -419,16 +419,6 @@ public final class SovEmuAPI: Sendable {
 
     public static func makeSession() -> URLSession { URLSession(configuration: sessionConfiguration()) }
 
-    /// The cookie the server's sign-in used before tokens: it means nothing now, so it goes.
-    public static let legacySessionCookie = "sovemu_session"
-
-    /// Deletes any stored `sovemu_session` cookie (from an older version of the app).
-    public static func clearLegacySessionCookie(in storage: HTTPCookieStorage = .shared) {
-        for cookie in storage.cookies ?? [] where cookie.name == legacySessionCookie {
-            storage.deleteCookie(cookie)
-        }
-    }
-
     /// A refresh token is stored.
     public var isSignedIn: Bool { auth?.isSignedIn ?? false }
 

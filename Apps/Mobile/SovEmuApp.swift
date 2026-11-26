@@ -55,8 +55,6 @@ final class AppModel {
     private static let bootstrapKey = "bootstrap"
 
     init() {
-        // Before tokens the server signed in with a cookie; it means nothing now.
-        SovEmuAPI.clearLegacySessionCookie()
         if let data = UserDefaults.standard.data(forKey: Self.bootstrapKey),
            let saved = try? JSONDecoder().decode(SavedBootstrap.self, from: data), saved.server == serverURL {
             bootstrap = saved.config

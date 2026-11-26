@@ -331,18 +331,6 @@ struct AuthTests {
         await offline.signOut()
         #expect(!offline.isSignedIn)
     }
-
-    @Test func clearsTheOldSessionCookie() throws {
-        let storage = HTTPCookieStorage.shared
-        let domain = "cookie-\(UUID().uuidString.lowercased()).test"
-        for name in ["sovemu_session", "other"] {
-            storage.setCookie(try #require(HTTPCookie(properties: [.domain: domain, .path: "/", .name: name, .value: "v"])))
-        }
-        SovEmuAPI.clearLegacySessionCookie(in: storage)
-        let left = (storage.cookies ?? []).filter { $0.domain == domain }.map(\.name)
-        #expect(left == ["other"])
-        storage.cookies(for: URL(string: "http://\(domain)/")!)?.forEach(storage.deleteCookie)
-    }
 }
 
 /// `bootstrapConfig`: the anonymous query the app asks first, whose answer names the client id
