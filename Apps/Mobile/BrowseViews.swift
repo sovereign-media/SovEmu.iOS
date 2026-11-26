@@ -27,7 +27,11 @@ struct ConnectView: View {
         ZStack {
             surface.ignoresSafeArea()
             VStack(alignment: .leading, spacing: 14) {
-                Text("SovEmu").font(.system(size: 34, weight: .black))
+                // SovEmu's mark (the SovEmuMark asset, a template image) in the accent, then the name.
+                HStack(spacing: 10) {
+                    Image("SovEmuMark").resizable().scaledToFit().frame(height: 44).foregroundStyle(Sov.accent)
+                    Text("SovEmu").font(.system(size: 34, weight: .black))
+                }
                 Text("Connect to your SovEmu server.").foregroundStyle(.secondary)
                 TextField("Server address (http://192.168.1.20:8080)", text: $server)
                     .textContentType(.URL).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
