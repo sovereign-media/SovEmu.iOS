@@ -41,6 +41,8 @@ targets:
         # The app wraps WebRTC's Objective-C delegates; Swift 6 strict concurrency would need
         # isolation annotations everywhere for no benefit. SovEmuKit itself is Swift 6.
         SWIFT_VERSION: "5.0"
+        # The app icon: Apps/Mobile/Assets.xcassets/AppIcon, written by SovEmu's brand/generate.mjs.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIRequiresFullScreen: YES
