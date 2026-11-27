@@ -136,7 +136,7 @@ extension View {
     func routes() -> some View {
         navigationDestination(for: Route.self) { route in
             switch route {
-            case .system(let system, let open): SystemView(system: system, openFirst: open)
+            case .system(let system, let open): TVSystemView(system: system, openFirst: open)
             }
         }
     }
