@@ -4,7 +4,8 @@ extension WireProtocol {
     static let typeStats: UInt8 = 0x04
 
     /// This client's view of the stream (`0x04`: type, version, then a JSON object), sent once a
-    /// second while playing: the worker lowers the video bitrate for a client that is not
+    /// second from connecting (before any video, while the worker checks the connection, only
+    /// the round trip and the path): the worker lowers the video bitrate for a client that is not
     /// keeping up (`fps`, `frames_dropped`, `decode_ms`) and logs it beside its own health lines
     /// (`client stats`). Every value is optional, as `ClientStats` in SovEmu.Protocol; times in
     /// ms, rates in kbit/s.
@@ -32,17 +33,21 @@ extension WireProtocol {
         public var framesDropped: Int?
         /// The video decoder (`decoderImplementation`).
         public var decoder: String?
+        /// How this client reaches the worker (`LinkLabels.clientPath`): `direct`, or through the
+        /// relay over `relay-udp`, `relay-tcp` or `relay-tls`.
+        public var path: String?
 
         public init(client: String? = nil, estimateMs: Double? = nil, inputToFrameMs: Int64? = nil,
                     inputRttP50Ms: Int64? = nil, inputRttP95Ms: Int64? = nil, netRttMs: Double? = nil,
                     jitterMs: Double? = nil, decodeMs: Double? = nil,
                     width: Int? = nil, height: Int? = nil, fps: Double? = nil, kbps: Double? = nil,
-                    packetsLost: Int? = nil, framesDropped: Int? = nil, decoder: String? = nil) {
+                    packetsLost: Int? = nil, framesDropped: Int? = nil, decoder: String? = nil, path: String? = nil) {
             (self.client, self.estimateMs, self.inputToFrameMs) = (client, estimateMs, inputToFrameMs)
             (self.inputRttP50Ms, self.inputRttP95Ms) = (inputRttP50Ms, inputRttP95Ms)
             (self.netRttMs, self.jitterMs, self.decodeMs) = (netRttMs, jitterMs, decodeMs)
             (self.width, self.height, self.fps, self.kbps) = (width, height, fps, kbps)
             (self.packetsLost, self.framesDropped, self.decoder) = (packetsLost, framesDropped, decoder)
+            self.path = path
         }
     }
 
@@ -76,6 +81,7 @@ extension WireProtocol {
             ("packets_lost", integer(stats.packetsLost)),
             ("frames_dropped", integer(stats.framesDropped)),
             ("decoder", string(stats.decoder)),
+            ("path", string(stats.path)),
         ]
         let body = fields.compactMap { key, value in value.map { "\"\(key)\":\($0)" } }.joined(separator: ",")
         return Data([typeStats, inputVersion]) + Data("{\(body)}".utf8)
@@ -116,7 +122,8 @@ extension WireProtocol {
 }
 
 /// One reading of a peer connection's stats (WebRTC's `statistics`): the inbound video's
-/// counters, cumulative as WebRTC reports them, and the selected candidate pair's round trip.
+/// counters, cumulative as WebRTC reports them, and the selected candidate pair (its round trip
+/// and both ends).
 public struct StatsReading: Equatable, Sendable {
     /// Seconds, on any clock that only moves forward.
     public var at: Double
@@ -135,16 +142,24 @@ public struct StatsReading: Equatable, Sendable {
     public var framesDropped: Int?
     public var networkRttMs: Double?
     public var decoder: String?
+    /// There is an inbound video stream to read: false before the first frame, while the worker
+    /// checks the connection and sends none.
+    public var hasVideo: Bool
+    /// The selected candidate pair's two ends; nil before ICE has chosen one.
+    public var local: IceCandidateStats?
+    public var remote: IceCandidateStats?
 
     public init(at: Double, bytesReceived: Double = 0, jitterBufferDelay: Double = 0, jitterBufferEmittedCount: Double = 0,
                 totalDecodeTime: Double = 0, framesDecoded: Double = 0, framesPerSecond: Double? = nil,
                 width: Int? = nil, height: Int? = nil, packetsLost: Int = 0, framesDropped: Int? = nil,
-                networkRttMs: Double? = nil, decoder: String? = nil) {
+                networkRttMs: Double? = nil, decoder: String? = nil, hasVideo: Bool = true,
+                local: IceCandidateStats? = nil, remote: IceCandidateStats? = nil) {
         (self.at, self.bytesReceived) = (at, bytesReceived)
         (self.jitterBufferDelay, self.jitterBufferEmittedCount) = (jitterBufferDelay, jitterBufferEmittedCount)
         (self.totalDecodeTime, self.framesDecoded, self.framesPerSecond) = (totalDecodeTime, framesDecoded, framesPerSecond)
         (self.width, self.height, self.packetsLost, self.framesDropped) = (width, height, packetsLost, framesDropped)
         (self.networkRttMs, self.decoder) = (networkRttMs, decoder)
+        (self.hasVideo, self.local, self.remote) = (hasVideo, local, remote)
     }
 }
 
@@ -162,6 +177,10 @@ public struct StatsSampler: Sendable {
                                 inputToFrameMs: Int64? = nil) -> WireProtocol.Stats {
         let prev = last
         last = now
+        let path = LinkLabels.clientPath(now.local)
+        // Before the first frame (the worker checking the connection): the round trip and the
+        // path already go to the worker, which judges the link by them.
+        guard now.hasVideo else { return WireProtocol.Stats(client: client, netRttMs: now.networkRttMs, path: path) }
         func perFrame(_ total: KeyPath<StatsReading, Double>, _ count: KeyPath<StatsReading, Double>) -> Double? {
             guard let prev else { return nil }
             let n = now[keyPath: count] - prev[keyPath: count]
@@ -191,7 +210,8 @@ public struct StatsSampler: Sendable {
             kbps: seconds.map { (now.bytesReceived - (prev?.bytesReceived ?? 0)) * 8 / 1000 / $0 },
             packetsLost: now.packetsLost,
             framesDropped: now.framesDropped,
-            decoder: now.decoder)
+            decoder: now.decoder,
+            path: path)
     }
 }
 
@@ -219,6 +239,18 @@ extension WireProtocol.Stats {
 }
 
 extension WireProtocol {
+    /// Everything the stats overlay shows for one sample, as the web's `StatsSampler`: the
+    /// stats' rows and the worker's `pipeline` once there is video, then the Network rows from
+    /// the selected pair, the check of the connection (`link`) and the pipeline's estimate.
+    /// Before the first frame only the Network rows: the rest would be dashes.
+    public static func overlayRows(_ stats: Stats, reading: StatsReading, pipeline: Pipeline?,
+                                   link: Link?) -> [(label: String, value: String)] {
+        let network = networkRows(local: reading.local, remote: reading.remote, link: link,
+                                  estimateKbps: pipeline?.video.estimateKbps ?? 0)
+        guard reading.hasVideo else { return network }
+        return stats.rows() + pipelineRows(pipeline, decoder: stats.decoder) + network
+    }
+
     /// The overlay's rows on how the stream is made, after the stats': the worker's `pipeline`
     /// (none from a server that predates it, so no rows) and this app's `decoder`. The labels
     /// and formats are the other clients'.

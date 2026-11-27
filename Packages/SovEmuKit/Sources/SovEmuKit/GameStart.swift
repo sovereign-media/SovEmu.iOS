@@ -3,7 +3,8 @@ import Foundation
 // The loading screen while a game starts, as the other clients' (SovEmu.Web's launch.ts,
 // SovEmu.Android's GameStart.kt): the server's phases (saving the last session, starting the
 // emulator, opening the core, reading the game) turned into one bar that only moves forward,
-// then the wait for the first picture, which the server cannot see.
+// then connecting, the worker's check of the connection (`0x83`, #243), and the wait for the
+// first picture, which the server cannot see.
 //
 // Reading the game is most of a slow start. When the server knows how much it will read the bar
 // is exact; when the core reads a disc itself it is not, and the bar eases towards the end of
@@ -32,8 +33,9 @@ private let phases: [StartPhase: Phase] = [
     .stopping: Phase(from: 0, to: 0.08, label: "Saving your last game", ease: 3000),
     .launching: Phase(from: 0.08, to: 0.12, label: "Starting the emulator", ease: 1000),
     .core: Phase(from: 0.12, to: 0.18, label: "Loading the emulator", ease: 1500),
-    .content: Phase(from: 0.18, to: 0.97, label: "Loading the game", ease: 15000),
-    .ready: Phase(from: 1, to: 1, label: "Ready", ease: 1),
+    .content: Phase(from: 0.18, to: 0.85, label: "Loading the game", ease: 15000),
+    // Ready leaves the bar's last stretch to checking the connection and the first picture.
+    .ready: Phase(from: 0.85, to: 0.85, label: "Ready", ease: 1),
     .failed: Phase(from: 0, to: 0, label: "Could not start", ease: 1),
 ]
 
@@ -70,19 +72,70 @@ public func describeStart(_ s: StartStatus) -> LaunchView {
     return LaunchView(label: p.label, detail: parts.joined(separator: " · "), fraction: p.from + (p.to - p.from) * within)
 }
 
+/// How to leave a start that is slow, stuck or failed, under the loading bar: as terse as the
+/// web's `Menu: Esc / Select+Start`, with the ☰ button.
+public let loadingHint = "Menu: ☰ / Select+Start"
+
 /// After this long without a picture the wait says how to get out of it.
 public let noPictureHintMs: Int64 = 20_000
 
-/// The last stretch of a start, which the server cannot see: the session is ready, and the game
-/// has yet to draw its first picture (a console's BIOS boots for seconds; a save is loaded once
-/// the game is up). The bar is full; the detail counts the wait. (The ☰ button, where the web
-/// says Escape and Android Back.)
+/// Where the check of the connection takes the bar: from the session being ready to almost full.
+private let network = (from: 0.85, to: 0.97)
+
+/// The session is ready and this app is reaching it (ICE, then DTLS): nothing to show of the
+/// game yet, and the worker's check of the connection comes once connected.
+public func describeConnecting(waitedMs: Int64) -> LaunchView {
+    let seconds = waitedMs / 1000
+    return LaunchView(label: "Connecting", detail: seconds >= 3 ? "\(seconds) s" : "", fraction: network.from)
+}
+
+/// The check of the player's connection before the stream starts (`0x83`, #243): the worker
+/// sends no video meanwhile, so it runs between the session being ready and the first picture.
+/// The bar follows its time against its budget. Where the player is shows in a chip of its own
+/// (`LinkLabels.networkLabel`).
+public func describeLink(_ link: WireProtocol.Link) -> LaunchView {
+    let within = link.budgetMs > 0 ? min(1, Double(link.elapsedMs) / Double(link.budgetMs)) : 1
+    return LaunchView(label: "Checking your connection", detail: "", fraction: network.from + (network.to - network.from) * within)
+}
+
+/// The last stretch of a start, which the server cannot see: the session is ready (and the
+/// connection checked), and the game has yet to draw its first picture (a console's BIOS boots
+/// for seconds; a save is loaded once the game is up). The detail counts the wait. (The ☰
+/// button, where the web says Escape and Android Back.)
 public func describeFirstPicture(waitedMs: Int64) -> LaunchView {
     let seconds = waitedMs / 1000
     var parts: [String] = []
     if seconds >= 3 { parts.append("\(seconds) s") }
     if waitedMs >= noPictureHintMs { parts.append("still no picture: ☰ opens the menu") }
-    return LaunchView(label: "Starting the game", detail: parts.joined(separator: " · "), fraction: 1)
+    return LaunchView(label: "Starting the game", detail: parts.joined(separator: " · "), fraction: network.to)
+}
+
+/// The loading screen's background: a picture, and how it is drawn.
+public struct LoadingBackground: Sendable, Equatable {
+    public let url: String
+    /// A save's screenshot, at the console's own resolution: drawn with sharp pixels.
+    public let pixelated: Bool
+    /// Box art, which is not a picture of the game being played: blurred into a backdrop.
+    public let blurred: Bool
+
+    public init(url: String, pixelated: Bool = false, blurred: Bool = false) {
+        (self.url, self.pixelated, self.blurred) = (url, pixelated, blurred)
+    }
+}
+
+/// What the loading screen shows behind the start (#243), first found of: the screenshot of the
+/// save being continued, the game's own screenshot, its box art (blurred). Nil leaves the
+/// system's colour.
+public func loadingBackground(saveShot: String?, image: String?, boxArt: String?) -> LoadingBackground? {
+    if let saveShot, !saveShot.isEmpty { return LoadingBackground(url: saveShot, pixelated: true) }
+    if let image, !image.isEmpty { return LoadingBackground(url: image) }
+    if let boxArt, !boxArt.isEmpty { return LoadingBackground(url: boxArt, blurred: true) }
+    return nil
+}
+
+/// The loading screen's status line once the emulator is up: `FCEUmm · 256×224 @ 60.10 fps`.
+public func loadingStatus(core: String, width: Int, height: Int, fps: Double) -> String {
+    "\(core) · \(width)×\(height) @ \(String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), fps)) fps"
 }
 
 /// Keeps a bar from ever moving backwards (a phase can report less than the one before).
@@ -116,9 +169,13 @@ public struct StartScreen: Sendable, Equatable {
 public enum GameStart {
     /// `error` (a failure to start, or a lost connection) wins; then the session starting
     /// (`ready` not yet), with the server's `progress` once it has said (a FAILED start shows its
-    /// error); then, until `pictureShown`, the wait for it, `waitedMs` so far; then nil.
+    /// error); then, until `pictureShown`: connecting until the worker's first `link` (an older
+    /// worker sends none, and its picture comes at once), the check of the connection while it
+    /// is `probing`, and the wait for the picture, `waitedMs` so far; then nil. The bar never
+    /// falls below `bar`, the furthest it has been.
     public static func screen(
-        title: String, error: String?, progress: StartStatus?, bar: Double, ready: Bool, pictureShown: Bool, waitedMs: Int64
+        title: String, error: String?, progress: StartStatus?, bar: Double, ready: Bool, link: WireProtocol.Link? = nil,
+        pictureShown: Bool, waitedMs: Int64
     ) -> StartScreen? {
         if let error { return StartScreen(label: error) }
         if !ready {
@@ -129,7 +186,11 @@ public enum GameStart {
                 : StartScreen(label: view.label, detail: view.detail, fraction: bar)
         }
         if pictureShown { return nil }
-        let view = describeFirstPicture(waitedMs: waitedMs)
-        return StartScreen(label: view.label, detail: view.detail, fraction: view.fraction)
+        let view = if let link {
+            link.state == WireProtocol.Link.probing ? describeLink(link) : describeFirstPicture(waitedMs: waitedMs)
+        } else {
+            describeConnecting(waitedMs: waitedMs)
+        }
+        return StartScreen(label: view.label, detail: view.detail, fraction: max(bar, view.fraction))
     }
 }
