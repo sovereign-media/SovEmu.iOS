@@ -17,6 +17,12 @@ struct MenuItem: Identifiable {
     var enabled = true
     /// A delete button beside the row (a cheat's).
     var onDelete: (() -> Void)?
+    /// The SF Symbol before the title, where the TV draws one (Android's Lucide icons).
+    var icon: String?
+    /// What a remapping row's button is bound to, one key cap each (the TV draws them as caps).
+    var keys: [String]?
+    /// A switch's state, on a row that turns something on and off (a cheat), where the TV draws one.
+    var isOn: Bool?
 }
 
 /// The in-game menu's pages and the controller-driven navigation through them: the D-pad (or
@@ -60,6 +66,9 @@ final class GameMenu {
     /// Bumped when a mapping changes, so its page redraws.
     private var revision = 0
     private(set) var closedAt = Date.distantPast
+    /// The last word of the device page (saved, not saved, a stick's note), which the TV shows in
+    /// its banner as SovEmu.Android's does; the phone shows it as a toast.
+    private(set) var note: String?
 
     /// Which mappings the device page edits: this system's (the default) or every system's.
     private(set) var scope: MappingScope = .everySystem
@@ -101,8 +110,38 @@ final class GameMenu {
 
     private func show(_ next: Page) {
         page = next
+        note = nil
+        // On a TV the device page starts on its first button, as SovEmu.Android's (the scope is
+        // above it, in the header).
+        #if os(tvOS)
+        if case .device = next {
+            focus = 1
+            return
+        }
+        #endif
         focus = 0
     }
+
+    /// Says something on the device page (and as a toast).
+    private func say(_ text: String) {
+        note = text
+        flash(text)
+    }
+
+    /// The device whose page is open.
+    var openDevice: Controller.Device? {
+        guard case .device(let key) = page else { return nil }
+        return devices.first { $0.key == key }
+    }
+
+    /// Where the device's mapping on this system comes from ("Your own", "Default"), as
+    /// SovEmu.Android's "In force here".
+    func inForce(_ device: Controller.Device) -> String {
+        controller.mappings.origin(for: device.identity.id, in: .system(system.id)).text
+    }
+
+    /// Which scope the device page edits.
+    var editsEverySystem: Bool { scope == .everySystem }
 
     // MARK: Pages
 
@@ -135,11 +174,15 @@ final class GameMenu {
                     id: "scope", title: "Mapping for", detail: scopeName(scope),
                     action: { [weak self] in self?.toggleScope() },
                     adjust: { [weak self] _ in self?.toggleScope() }),
-                MenuItem(
-                    id: "player", title: "Player \(device.port + 1)", detail: "◀ ▶ to change",
-                    action: { [weak self] in self?.move(device, by: device.port == WireProtocol.maxPorts - 1 ? -device.port : 1) },
-                    adjust: { [weak self] delta in self?.move(device, by: delta) }),
             ]
+            // The TV's device page is SovEmu.Android's: the player is chosen on the Controllers
+            // page, not here.
+            #if !os(tvOS)
+            rows.append(MenuItem(
+                id: "player", title: "Player \(device.port + 1)", detail: "◀ ▶ to change",
+                action: { [weak self] in self?.move(device, by: device.port == WireProtocol.maxPorts - 1 ? -device.port : 1) },
+                adjust: { [weak self] delta in self?.move(device, by: delta) }))
+            #endif
             // The system's buttons by its labels ("C" on a Mega Drive is RetroPad A); for every
             // system, all sixteen by RetroPad name.
             for entry in remapButtons(info?.controls, scope: scope) {
@@ -148,7 +191,8 @@ final class GameMenu {
                 rows.append(MenuItem(
                     id: button.name, title: entry.label,
                     detail: "←  " + (inputs.isEmpty ? "—" : inputs.joined(separator: ", ")),
-                    action: { [weak self] in self?.startCapture(device, button, label: entry.label) }))
+                    action: { [weak self] in self?.startCapture(device, button, label: entry.label) },
+                    keys: inputs))
             }
             // The system's analog controls: always their own stick, so shown but never rebound.
             if !identity.isKeyboard {
@@ -156,8 +200,9 @@ final class GameMenu {
                     rows.append(MenuItem(
                         id: "stick:" + stick.key, title: stick.label, detail: "←  " + stick.stickName,
                         action: { [weak self] in
-                            self?.flash("\(stick.label) is always the \(stick.stickName.lowercased()): sticks are not remapped")
-                        }))
+                            self?.say("\(stick.label) is always the \(stick.stickName.lowercased()): sticks are not remapped")
+                        },
+                        keys: [stick.stickName]))
                 }
             }
             // Only the user's own mapping in this scope can be reset; a default is in force.
@@ -165,6 +210,14 @@ final class GameMenu {
                 rows.append(MenuItem(id: "reset", title: "Reset to defaults", action: { [weak self] in self?.reset(identity) }))
             }
             rows.append(MenuItem(id: "back", title: "Back", action: { [weak self] in self?.show(.controllers) }))
+            #if os(tvOS)
+            // The TV draws Reset and Back side by side at the foot: left and right move between them.
+            if rows.count >= 2, rows[rows.count - 2].id == "reset" {
+                let last = rows.count - 1
+                rows[last - 1].adjust = { [weak self] delta in if delta > 0 { self?.focus = last } }
+                rows[last].adjust = { [weak self] delta in if delta < 0 { self?.focus = last - 1 } }
+            }
+            #endif
             return rows
         }
     }
@@ -218,6 +271,7 @@ final class GameMenu {
 
     private func toggleScope() {
         scope = scope == .everySystem ? .system(system.id) : .everySystem
+        note = nil
     }
 
     func startCapture(_ device: Controller.Device, _ button: RetroButton, label: String) {
@@ -227,6 +281,7 @@ final class GameMenu {
             back: RebindCapture.backInput(isKeyboard: isKeyboard), alreadyHeld: held, startMs: nowMs(),
             bindable: { isKeyboard ? KeyNames.bindable($0) : PadInput(rawValue: $0) != nil })
         capture = Capture(device: device.key, identity: device.identity, button: button, label: label)
+        note = nil
     }
 
     func cancelCapture() {
@@ -249,8 +304,9 @@ final class GameMenu {
                 // Saved in the scope, then both lists read back: what is in force may change.
                 self.controller.mappings = try await mappings.saving(mapping, for: id, name: name, in: scope, with: api)
                 self.revision += 1
+                self.note = "Saved"
             } catch {
-                self.flash("Not saved: \(error.localizedDescription)")
+                self.say("Not saved: \(error.localizedDescription)")
             }
         }
     }
@@ -265,9 +321,9 @@ final class GameMenu {
                 self.controller.mappings = try await self.controller.mappings.resetting(identity.id, in: scope, with: api)
                 self.revision += 1
                 let origin = self.controller.mappings.origin(for: identity.id, in: scope)
-                self.flash("\(identity.name) (\(self.scopeName(scope))): now \(origin.text.lowercased())")
+                self.say("\(identity.name) (\(self.scopeName(scope))): now \(origin.text.lowercased())")
             } catch {
-                self.flash("Not reset: \(error.localizedDescription)")
+                self.say("Not reset: \(error.localizedDescription)")
             }
         }
     }

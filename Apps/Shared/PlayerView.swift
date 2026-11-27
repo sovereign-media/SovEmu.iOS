@@ -20,6 +20,22 @@ private let stallSeconds = 3
 /// Where stats are turned on, and on the overlay: they cost a little every second.
 private let statsWarning = "Showing stats can affect game performance."
 
+/// A size on the phone, or SovEmu.Android TV's for the same thing on a TV: Android lays a TV out
+/// 1280 dp wide, so one of its dp is 1.5 of the TV's 1920 points.
+private func sized(_ phone: CGFloat, tv androidDp: CGFloat) -> CGFloat { onTV(phone, tv: androidDp * 1.5) }
+
+/// The same size on both: Android's phone and TV values are one, in dp.
+private func sized(_ value: CGFloat) -> CGFloat { sized(value, tv: value) }
+
+/// Anything that is one thing on the phone and another on a TV.
+private func platform<T>(_ phone: T, tv: T) -> T {
+    #if os(tvOS)
+    tv
+    #else
+    phone
+    #endif
+}
+
 /// Waits for Continue or Start over, when there is an auto save and the player was not asked yet.
 @MainActor
 @Observable
@@ -85,6 +101,8 @@ struct PlayerView: View {
     @State private var addingCheat = false
     @State private var cheatCode = ""
     @State private var cheatName = ""
+    /// On a TV, the focused cheat's delete button has the focus rather than its row.
+    @State private var cheatSide = false
     @State private var showTouch = !Self.hasInputDevice
     /// The disc in the tray after a change (a multi-disc game); the session says until then.
     @State private var disc: Int?
@@ -123,7 +141,7 @@ struct PlayerView: View {
             if let statsRows {
                 StatsOverlay(rows: statsRows, history: history)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(16)
+                    .padding(sized(16, tv: 12))
                     .allowsHitTesting(false)
             }
             VStack {
@@ -140,29 +158,30 @@ struct PlayerView: View {
                 #endif
                 Spacer()
                 if let toast {
-                    Text(toast).padding(.horizontal, 16).padding(.vertical, 8)
-                        .background(.black.opacity(0.8), in: Capsule()).padding(.bottom, 24)
+                    Text(toast).font(.system(size: sized(17, tv: 16))).foregroundStyle(.white)
+                        .padding(.horizontal, sized(16)).padding(.vertical, sized(8))
+                        .background(.black.opacity(0.8), in: Capsule()).padding(.bottom, sized(24))
                 }
             }
-            .padding()
+            .padding(onTV(16, tv: 0))
             // Sovereign's player message chip (a glyph before the line, gray-950 at 75% under a
             // 2 pt white/40 edge, two lines at most), but at the very top edge of the screen
             // rather than 12% down, so it stays out of the game.
             if let quality {
                 VStack {
-                    HStack(spacing: 8) {
+                    HStack(spacing: sized(8)) {
                         if let symbol = Self.qualitySymbols[quality.icon] { Image(systemName: symbol) }
                         Text(quality.line).lineLimit(2)
                     }
-                    .font(.body).foregroundStyle(.white)
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .frame(minHeight: 40)
-                    .background(Color(red: 3 / 255, green: 7 / 255, blue: 18 / 255).opacity(0.75), in: RoundedRectangle(cornerRadius: 20))
-                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.4), lineWidth: 2))
-                    .frame(maxWidth: 560)
+                    .font(platform(.body, tv: .system(size: 24))).foregroundStyle(.white)
+                    .padding(.horizontal, sized(16)).padding(.vertical, sized(8))
+                    .frame(minHeight: sized(40))
+                    .background(Color(red: 3 / 255, green: 7 / 255, blue: 18 / 255).opacity(0.75), in: RoundedRectangle(cornerRadius: sized(20)))
+                    .overlay(RoundedRectangle(cornerRadius: sized(20)).strokeBorder(.white.opacity(0.4), lineWidth: sized(2)))
+                    .frame(maxWidth: sized(560))
                     Spacer()
                 }
-                .padding(.top, 8).padding(.horizontal, 16)
+                .padding(.top, sized(8)).padding(.horizontal, sized(16))
                 .allowsHitTesting(false)
             }
             if menuOpen { menu }
@@ -197,8 +216,10 @@ struct PlayerView: View {
         }
         .onChange(of: menuPage) { _, page in
             gameMenu?.focus = 0
+            cheatSide = false
             Task { await loadPage(page) }
         }
+        .onChange(of: gameMenu?.focus) { _, _ in cheatSide = false }
         .onChange(of: settings.stats) { _, on in
             history.clear()
             if !on { statsRows = nil }
@@ -232,12 +253,16 @@ struct PlayerView: View {
             Color.black.opacity(0.7).ignoresSafeArea().onTapGesture { if gameMenu?.capture == nil { close() } }
             if let gameMenu {
                 let items = gameMenu.items(main: pageItems, close: close)
+                #if os(tvOS)
+                tvMenu(gameMenu, items)
+                #else
                 GameMenuView(
                     title: pageTitle, heading: gameMenu.heading, items: items,
                     focus: Binding(get: { gameMenu.focus }, set: { gameMenu.focus = $0 }),
                     diagrams: gameMenu.diagrams(items),
                     prompt: gameMenu.capturePrompt, onCancelCapture: gameMenu.cancelCapture)
                     .padding()
+                #endif
             }
         }
         .task {
@@ -255,6 +280,36 @@ struct PlayerView: View {
             }
         }
     }
+
+    #if os(tvOS)
+    /// The menu as SovEmu.Android's TV app draws it: its own panel for each kind of page.
+    @ViewBuilder private func tvMenu(_ gameMenu: GameMenu, _ items: [MenuItem]) -> some View {
+        switch gameMenu.page {
+        case .controllers:
+            TVControllerList(devices: gameMenu.devices, items: items, focus: gameMenu.focus)
+        case .device:
+            TVDevicePage(menu: gameMenu, items: items)
+        case .main:
+            let style: TVMenuStyle = switch menuPage {
+            case .main: .main
+            case .save, .load: .slots
+            case .disc: .disc
+            case .cheats: .cheats
+            }
+            TVGameMenu(title: pageTitle, system: system, style: style, items: items, focus: gameMenu.focus,
+                       note: tvNote, deleteFocused: cheatSide)
+        }
+    }
+
+    /// What a page says where its rows would be: loading, or nothing there yet.
+    private var tvNote: String? {
+        switch menuPage {
+        case .save, .load: slots == nil ? "Loading saves…" : nil
+        case .cheats: cheats == nil ? "Loading cheats…" : cheats?.isEmpty == true ? "No cheats for this game yet. Add one below." : nil
+        default: nil
+        }
+    }
+    #endif
 
     private var pageTitle: String {
         switch menuPage {
@@ -297,7 +352,15 @@ struct PlayerView: View {
         switch menuPage {
         case .main: return mainItems
         case .save, .load:
+            // A TV says it is loading above the rows, as SovEmu.Android's (and has no Back row:
+            // the remote's Back, or B, goes back).
+            #if os(tvOS)
+            let back: [MenuItem] = []
+            guard let slots else { return [] }
+            #else
+            let back = [MenuItem(id: "back", title: "Back", action: { menuPage = .main })]
             guard let slots else { return [MenuItem(id: "loading", title: "Loading saves…", action: {}, enabled: false)] }
+            #endif
             let saving = menuPage == .save
             let now = Int64(Date().timeIntervalSince1970)
             let rows = slotRows(slots, saving ? saveSlots : [autoSlot] + saveSlots, emptyEnabled: saving)
@@ -307,12 +370,21 @@ struct PlayerView: View {
                     detail: row.save.map { "Saved " + formatAgo(Int64($0.savedAt), now: now) } ?? "Empty",
                     action: { saving ? save(to: row.slot) : load(from: row.slot) },
                     image: row.save?.screenshotUrl ?? "", enabled: row.enabled)
-            } + [MenuItem(id: "back", title: "Back", action: { menuPage = .main })]
+            } + back
         case .disc:
+            #if os(tvOS)
+            let back: [MenuItem] = []
+            #else
+            let back = [MenuItem(id: "back", title: "Back", action: { menuPage = .main })]
+            #endif
             return (1...max(1, discs)).map { n in
-                MenuItem(id: "disc\(n)", title: n == currentDisc ? "Disc \(n) · in the console" : "Disc \(n)") { change(disc: n) }
-            } + [MenuItem(id: "back", title: "Back", action: { menuPage = .main })]
+                MenuItem(id: "disc\(n)", title: n == currentDisc ? "Disc \(n) · in the console" : "Disc \(n)",
+                         action: { change(disc: n) }, icon: "opticaldisc")
+            } + back
         case .cheats:
+            #if os(tvOS)
+            return tvCheatItems
+            #else
             guard let cheats else { return [MenuItem(id: "loading", title: "Loading cheats…", action: {}, enabled: false)] }
             var rows = cheats.map { cheat in
                 MenuItem(
@@ -330,30 +402,64 @@ struct PlayerView: View {
             })
             rows.append(MenuItem(id: "back", title: "Back", action: { menuPage = .main }))
             return rows
+            #endif
         }
     }
 
+    #if os(tvOS)
+    /// The cheats on a TV, as SovEmu.Android's page: each turns on or off with a click, and right
+    /// moves to its delete button (left back); then adding one. Loading and an empty list are
+    /// said above the rows (`tvNote`).
+    private var tvCheatItems: [MenuItem] {
+        guard let cheats else { return [] }
+        let rows = cheats.map { cheat in
+            MenuItem(
+                id: "cheat\(cheat.id)", title: cheat.description.isEmpty ? cheat.code : cheat.description,
+                detail: cheat.description.isEmpty ? nil : cheat.code,
+                action: { cheatSide ? delete(cheat) : toggle(cheat) },
+                adjust: { cheatSide = $0 > 0 },
+                isOn: cheat.enabled)
+        }
+        return rows + [MenuItem(id: "add", title: "Add cheat") {
+            cheatCode = ""
+            cheatName = ""
+            addingCheat = true
+        }]
+    }
+    #endif
+
     private var mainItems: [MenuItem] {
+        // The icons are SovEmu.Android's (Lucide's Play, Check, History, Disc3, Sparkles, Gamepad2,
+        // Activity, LogOut), which the TV draws.
         var rows = [
-            MenuItem(id: "resume", title: "Resume") { close() },
-            MenuItem(id: "save", title: "Save state") { menuPage = .save },
-            MenuItem(id: "load", title: "Load state") { menuPage = .load },
+            MenuItem(id: "resume", title: "Resume", action: { close() }, icon: "play"),
+            MenuItem(id: "save", title: "Save state", action: { menuPage = .save }, icon: "checkmark"),
+            MenuItem(id: "load", title: "Load state", action: { menuPage = .load }, icon: "clock.arrow.circlepath"),
         ]
         if discs > 1 {
-            rows.append(MenuItem(id: "disc", title: "Change disc", detail: "Disc \(currentDisc) of \(discs)") { menuPage = .disc })
+            #if os(tvOS)
+            rows.append(MenuItem(id: "disc", title: "Change disc · disc \(currentDisc) of \(discs)",
+                                 action: { menuPage = .disc }, icon: "opticaldisc"))
+            #else
+            rows.append(MenuItem(id: "disc", title: "Change disc", detail: "Disc \(currentDisc) of \(discs)",
+                                 action: { menuPage = .disc }, icon: "opticaldisc"))
+            #endif
         }
         rows += [
-            MenuItem(id: "cheats", title: "Cheats") { menuPage = .cheats },
-            MenuItem(id: "controllers", title: "Controllers", detail: "Players and buttons") { gameMenu?.showControllers() },
-            MenuItem(id: "stats", title: settings.stats ? "Hide stats" : "Show stats", detail: statsWarning) {
-                settings.stats.toggle()
-            },
-            MenuItem(id: "touch", title: showTouch ? "Hide touch controls" : "Show touch controls") {
-                showTouch.toggle()
-                close()
-            },
-            MenuItem(id: "quit", title: "Quit game") { onExit() },
+            MenuItem(id: "cheats", title: "Cheats", action: { menuPage = .cheats }, icon: "sparkles"),
+            MenuItem(id: "controllers", title: "Controllers", detail: platform("Players and buttons", tv: nil),
+                     action: { gameMenu?.showControllers() }, icon: "gamecontroller"),
+            MenuItem(id: "stats", title: settings.stats ? "Hide stats" : "Show stats", detail: statsWarning,
+                     action: { settings.stats.toggle() }, icon: "waveform.path.ecg"),
         ]
+        // A TV has no touch controls to show.
+        #if os(iOS)
+        rows.append(MenuItem(id: "touch", title: showTouch ? "Hide touch controls" : "Show touch controls") {
+            showTouch.toggle()
+            close()
+        })
+        #endif
+        rows.append(MenuItem(id: "quit", title: "Quit game", action: { onExit() }, icon: "rectangle.portrait.and.arrow.right"))
         return rows
     }
 
@@ -662,41 +768,56 @@ private struct Splash: View {
         ZStack {
             backdrop.ignoresSafeArea()
             if chooser.asking {
-                HStack(spacing: 8) {
+                HStack(spacing: sized(8)) {
+                    #if os(tvOS)
+                    Button("Continue") { chooser.choose(.continue) }.buttonStyle(TVSovButtonStyle(symbol: "play.fill"))
+                    Button("Start over") { chooser.choose(.new) }
+                        .buttonStyle(TVSovButtonStyle(variant: .outline, symbol: "arrow.counterclockwise"))
+                    #else
                     Button { chooser.choose(.continue) } label: { Label("Continue", systemImage: "play.fill") }.buttonStyle(.sov())
                     Button { chooser.choose(.new) } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
                         .buttonStyle(.sov(.outline))
+                    #endif
                 }
                 .padding(24)
             } else {
                 progress.padding(.horizontal, 24)
             }
-            if let network {
-                Text(network).font(.system(size: 14, weight: .semibold)).foregroundStyle(Sov.slate100)
-                    .padding(.horizontal, 16).padding(.vertical, 6)
-                    .background(.black.opacity(0.6), in: Capsule())
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    .padding(24)
-            }
-            HStack(alignment: .bottom, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    SystemBadge(short: system.short, colour: system.accent)
-                    Text(game.title).font(.system(size: 32, weight: .black)).foregroundStyle(.white).lineLimit(1)
-                    if !status.isEmpty {
-                        Text(status).font(.system(size: 14)).monospacedDigit().foregroundStyle(Sov.slate300)
+            // A TV keeps to its safe area, about 5% in from each edge, as Android TV's; a phone a
+            // margin.
+            Group {
+                if let network {
+                    Text(network).font(.system(size: sized(14), weight: .semibold)).foregroundStyle(Sov.slate100)
+                        .padding(.horizontal, sized(16)).padding(.vertical, sized(6))
+                        .background(.black.opacity(0.6), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: sized(1)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+                HStack(alignment: .bottom, spacing: sized(24)) {
+                    VStack(alignment: .leading, spacing: sized(8)) {
+                        #if os(tvOS)
+                        TVSystemBadge(short: system.short, colour: system.accent, large: true)
+                        #else
+                        SystemBadge(short: system.short, colour: system.accent)
+                        #endif
+                        Text(game.title).font(.system(size: sized(32), weight: .black)).foregroundStyle(.white).lineLimit(1)
+                        if !status.isEmpty {
+                            Text(status).font(.system(size: sized(14))).monospacedDigit().foregroundStyle(Sov.slate300)
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if failed {
+                        Image(systemName: "exclamationmark.circle").font(.system(size: sized(36, tv: 40))).foregroundStyle(Sov.red300)
+                    } else {
+                        ProgressView().controlSize(.large).tint(.white.opacity(0.8))
+                            .frame(width: sized(36, tv: 40), height: sized(36, tv: 40))
                     }
                 }
-                Spacer(minLength: 0)
-                if failed {
-                    Image(systemName: "exclamationmark.circle").font(.system(size: 36)).foregroundStyle(Sov.red300)
-                } else {
-                    ProgressView().controlSize(.large).tint(.white.opacity(0.8))
-                }
+                .frame(maxHeight: .infinity, alignment: .bottom)
             }
-            .frame(maxHeight: .infinity, alignment: .bottom)
-            .padding(24)
+            .padding(.horizontal, platform(24, tv: 96)).padding(.vertical, platform(24, tv: 54))
         }
+        .ignoresSafeArea()
     }
 
     /// The picture, then an even black scrim at 55%, deepening to about 80% along the bottom
@@ -723,19 +844,32 @@ private struct Splash: View {
 
     /// The bar, what the start is doing, its detail and how to reach the menu, dead centre.
     private var progress: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: sized(12)) {
             if let fraction = screen.fraction {
+                #if os(tvOS)
+                // Android's bar: 6 dp on a faint track (tvOS's linear style is a thin line).
+                GeometryReader { bar in
+                    Capsule().fill(.white.opacity(0.15))
+                        .overlay(alignment: .leading) {
+                            Capsule().fill(Sov.accent).frame(width: bar.size.width * min(1, max(0, fraction)))
+                        }
+                }
+                .frame(width: sized(400), height: sized(6))
+                .animation(.easeOut(duration: 0.25), value: fraction)
+                #else
                 ProgressView(value: fraction).progressViewStyle(.linear).tint(Sov.accent).frame(maxWidth: 400)
                     .animation(.easeOut(duration: 0.25), value: fraction)
+                #endif
             }
-            Text(screen.label).font(.system(size: 20, weight: .semibold))
+            Text(screen.label).font(.system(size: sized(20), weight: .semibold))
                 .foregroundStyle(failed ? Sov.red300 : Sov.slate100).multilineTextAlignment(.center)
             if !screen.detail.isEmpty {
-                Text(screen.detail).font(.system(size: 16)).monospacedDigit().foregroundStyle(Sov.slate300)
+                Text(screen.detail).font(.system(size: sized(16))).monospacedDigit().foregroundStyle(Sov.slate300)
                     .multilineTextAlignment(.center)
             }
-            Text(loadingHint).font(.system(size: 13)).foregroundStyle(Sov.slate400)
+            Text(loadingHint).font(.system(size: sized(13))).foregroundStyle(Sov.slate400)
         }
+        .frame(maxWidth: sized(560, tv: 560))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
@@ -748,25 +882,38 @@ private struct StatsOverlay: View {
 
     var body: some View {
         let half = (rows.count + 1) / 2
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 20) {
+        VStack(alignment: .leading, spacing: sized(8, tv: 6)) {
+            HStack(alignment: .top, spacing: sized(20, tv: 14)) {
                 column(Array(rows.prefix(half)))
                 column(Array(rows.dropFirst(half)))
             }
-            LatencyGraph(history: history).frame(height: 64)
-            Text(statsWarning).font(.system(size: 10)).foregroundStyle(Sov.slate400)
+            LatencyGraph(history: history).frame(height: sized(64, tv: 48))
+            Text(statsWarning).font(.system(size: sized(10, tv: 9))).foregroundStyle(Sov.slate400)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, sized(12, tv: 8)).padding(.vertical, sized(8, tv: 6))
+        .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: sized(8)))
         .fixedSize(horizontal: true, vertical: false)
     }
 
+    /// The colour of each graphed value's line, by its row's label.
+    private static let graphKey = ["Measured button→frame": Sov.accent, "Estimated button→pixel": Sov.slate400]
+
     private func column(_ rows: [(label: String, value: String)]) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 1) { ForEach(rows, id: \.label) { Text($0.label).foregroundStyle(Sov.slate400) } }
-            VStack(alignment: .trailing, spacing: 1) { ForEach(rows, id: \.label) { Text($0.value).foregroundStyle(.white) } }
+        HStack(alignment: .top, spacing: sized(12, tv: 8)) {
+            VStack(alignment: .leading, spacing: sized(1, tv: 2)) { ForEach(rows, id: \.label) { Text($0.label).foregroundStyle(Sov.slate400) } }
+            VStack(alignment: .trailing, spacing: sized(1, tv: 2)) {
+                ForEach(rows, id: \.label) { row in
+                    // The graph's key: a jewel in its line's colour beside each value it draws.
+                    HStack(spacing: sized(4)) {
+                        if let colour = Self.graphKey[row.label] {
+                            Circle().fill(colour).frame(width: sized(6), height: sized(6))
+                        }
+                        Text(row.value).foregroundStyle(.white)
+                    }
+                }
+            }
         }
-        .font(.system(size: 12, design: .monospaced))
+        .font(.system(size: sized(12, tv: 10), design: .monospaced))
     }
 }
 
@@ -779,15 +926,15 @@ private struct LatencyGraph: View {
     var body: some View {
         Canvas { context, size in
             let top = history.scaleMaxMs()
-            let latest = history.latestMeasured.map { Text("\(Int($0.rounded())) ms").font(.system(size: 10, weight: .semibold, design: .monospaced))
+            let latest = history.latestMeasured.map { Text("\(Int($0.rounded())) ms").font(.system(size: sized(10), weight: .semibold, design: .monospaced))
                 .foregroundStyle(Sov.accent) }
-            let latestWidth: CGFloat = latest == nil ? 0 : 44
+            let latestWidth: CGFloat = latest == nil ? 0 : sized(44)
             let right = size.width - latestWidth - 4
             func y(_ ms: Double) -> CGFloat { size.height * (1 - ms / top) }
             for ms in [top, top / 2] {
                 context.stroke(Path { $0.move(to: CGPoint(x: 0, y: y(ms))); $0.addLine(to: CGPoint(x: right, y: y(ms))) },
-                               with: .color(Sov.edge), lineWidth: 1)
-                context.draw(Text("\(Int(ms.rounded()))").font(.system(size: 9, design: .monospaced)).foregroundStyle(Sov.slate500),
+                               with: .color(Sov.edge), lineWidth: sized(1))
+                context.draw(Text("\(Int(ms.rounded()))").font(.system(size: sized(9), design: .monospaced)).foregroundStyle(Sov.slate500),
                              at: CGPoint(x: 0, y: y(ms)), anchor: .topLeading)
             }
             let step = right / CGFloat(history.capacity - 1)
@@ -808,8 +955,8 @@ private struct LatencyGraph: View {
                 }
                 return path
             }
-            context.stroke(trace(history.estimated), with: .color(Sov.slate400), lineWidth: 1)
-            context.stroke(trace(history.measured), with: .color(Sov.accent), lineWidth: 2)
+            context.stroke(trace(history.estimated), with: .color(Sov.slate400), lineWidth: sized(1))
+            context.stroke(trace(history.measured), with: .color(Sov.accent), lineWidth: sized(2))
             if let latest, let v = history.latestMeasured {
                 context.draw(latest, at: CGPoint(x: size.width, y: min(max(y(v), 6), size.height - 6)), anchor: .trailing)
             }
