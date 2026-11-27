@@ -9,6 +9,8 @@ struct Seen: Sendable {
     let authorization: String?
     let cookie: String?
     let form: [String: String]
+    /// Every header the request carried.
+    var headers: [String: String] = [:]
 }
 
 /// A stand-in server for one test, reached through `URLProtocol`: each stub gets its own host,
@@ -91,7 +93,7 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         }
         let seen = Seen(
             path: url.path(), authorization: request.value(forHTTPHeaderField: "Authorization"),
-            cookie: request.value(forHTTPHeaderField: "Cookie"), form: form)
+            cookie: request.value(forHTTPHeaderField: "Cookie"), form: form, headers: request.allHTTPHeaderFields ?? [:])
         // URLProtocol and its client predate Sendable; the client is safe to call from any thread.
         struct Loading: @unchecked Sendable { let request: URLProtocol, client: (any URLProtocolClient)? }
         let loading = Loading(request: self, client: client)

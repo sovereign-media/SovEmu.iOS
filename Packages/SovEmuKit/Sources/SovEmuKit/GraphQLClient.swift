@@ -9,12 +9,15 @@ import Foundation
 /// cache configured.
 enum GraphQLClient {
     /// A client for `baseURL`'s `/graphql`, sending `auth`'s access token (none when `auth` is
-    /// nil: the anonymous `bootstrapConfig`).
-    static func make(baseURL: URL, auth: TokenClient?, session: URLSession) -> ApolloClient {
+    /// nil: the anonymous `bootstrapConfig`) and the person's proxy headers (`headers`).
+    static func make(
+        baseURL: URL, auth: TokenClient?, session: URLSession, headers: @escaping @Sendable () -> [CustomHeader] = { [] }
+    ) -> ApolloClient {
         let store = ApolloStore(cache: InMemoryNormalizedCache())
         let transport = RequestChainNetworkTransport(
             urlSession: session,
-            interceptorProvider: Interceptors(auth: auth),
+            interceptorProvider: Interceptors(
+                auth: auth, headers: CustomHeaderInterceptor(headers: headers, server: { baseURL.absoluteString })),
             store: store,
             endpointURL: baseURL.appending(path: "graphql")
         )
@@ -30,9 +33,16 @@ enum GraphQLClient {
 
 /// The interceptors every operation runs through: no automatic persisted queries (the server does
 /// not take them) and no retries beyond the one `BearerInterceptor` spends. `MaxRetryInterceptor`
-/// sits first anyway, as Apollo advises, so a bug that kept retrying could not loop forever.
+/// sits first anyway, as Apollo advises, so a bug that kept retrying could not loop forever. The
+/// proxy headers go on at the HTTP step, on every attempt.
 struct Interceptors: InterceptorProvider {
     let auth: TokenClient?
+    let headers: CustomHeaderInterceptor
+
+    func httpInterceptors<Operation: GraphQLOperation>(for _: Operation) -> [any HTTPInterceptor] {
+        // Apollo's default, which `BearerInterceptor` reads a 401 from, and the headers.
+        [headers, ResponseCodeInterceptor()]
+    }
 
     func graphQLInterceptors<Operation: GraphQLOperation>(for _: Operation) -> [any GraphQLInterceptor] {
         var interceptors: [any GraphQLInterceptor] = [MaxRetryInterceptor(maxRetriesAllowed: 1)]
