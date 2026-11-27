@@ -5,6 +5,7 @@ import SovEmuKit
 
 struct TVAccountView: View {
     @Environment(AppModel.self) private var model
+    @Environment(TVSession.self) private var session
     @Environment(Library.self) private var library
     @Environment(AppSettings.self) private var settings
 
@@ -30,12 +31,12 @@ struct TVAccountView: View {
             }
             Section {
                 Button {
-                    Task { await model.signOut() }
+                    session.changeUserOrServer()
                 } label: {
-                    Label("Change user or server", systemImage: "person.2")
+                    Label(LaunchText.changeUserOrServer, systemImage: "person.2")
                 }
                 Button(role: .destructive) {
-                    Task { await model.signOut() }
+                    Task { await session.signOut() }
                 } label: {
                     Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
                 }

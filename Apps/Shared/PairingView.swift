@@ -116,7 +116,7 @@ private struct CodeWords: View {
 
 /// A QR code, sharp at any size: Core Image's generator, scaled without smoothing, dark on a
 /// light margin so a phone's camera reads it.
-private struct QRCodeImage: View {
+struct QRCodeImage: View {
     let text: String
 
     var body: some View {

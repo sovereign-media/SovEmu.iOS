@@ -97,6 +97,7 @@ struct RootView: View {
     /// screen kept awake while a game plays, or in the menus while a screensaver will come.
     private func update() {
         let menus = playing == nil
+        model.playing = !menus
         music.play(settings.music && menus && !screensaver && phase == .active)
         UIApplication.shared.isIdleTimerDisabled = !menus || (settings.screensaverMinutes > 0 && model.signedIn)
         if menus { idle.touched() }

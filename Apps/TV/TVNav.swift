@@ -72,7 +72,7 @@ struct MainView: View {
         case .home:
             NavigationStack(path: $home) { TVHomeView(path: $home).routes().backToDock(home.isEmpty) { docked = .home } }
         case .search:
-            NavigationStack(path: $search) { SearchView().routes().backToDock(search.isEmpty) { docked = .search } }
+            NavigationStack(path: $search) { TVSearchView().routes().backToDock(search.isEmpty) { docked = .search } }
         case .systems:
             NavigationStack(path: $systems) {
                 Group {
@@ -315,7 +315,7 @@ private struct SystemsMenu: View {
 
 /// The account's menu: the app's settings, changing user or server, and signing out.
 private struct AccountMenu: View {
-    @Environment(AppModel.self) private var model
+    @Environment(TVSession.self) private var session
     @Environment(Library.self) private var library
     @Environment(AppSettings.self) private var settings
     let close: () -> Void
@@ -337,11 +337,11 @@ private struct AccountMenu: View {
             }
             MenuRow(label: "Change user or server") { icon("person.2") } action: {
                 close()
-                Task { await model.signOut() }
+                session.changeUserOrServer()
             }
             MenuRow(label: "Sign out") { icon("rectangle.portrait.and.arrow.right") } action: {
                 close()
-                Task { await model.signOut() }
+                Task { await session.signOut() }
             }
         }
     }

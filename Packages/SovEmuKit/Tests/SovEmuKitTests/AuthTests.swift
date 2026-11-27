@@ -156,6 +156,18 @@ struct AuthTests {
         #expect(TokenClient.formEncode("a&b=c+d") == "a%26b%3Dc%2Bd")
     }
 
+    /// The TV keys each account on the ID token's `sub`: a sign-in must hand it over, and a
+    /// sign-out must not leave the last person's behind for the next sign-in to be filed under.
+    @Test func keepsTheIdTokenUntilSignOut() async throws {
+        let stub = Stub { _, _ in Stub.tokens("a1", "r1") }
+        let auth = TokenClient(baseURL: stub.base, endpoints: stub.endpoints, store: MemoryTokenStore(), session: stub.session)
+        #expect(await auth.idToken == nil)
+        try await auth.signIn(username: "ada", password: "pw")
+        #expect(await auth.idToken == "x.y.z")
+        await auth.signOut()
+        #expect(await auth.idToken == nil)
+    }
+
     @Test func wrongPasswordShowsTheServersDescription() async throws {
         let stub = Stub { _, _ in Stub.oauthError(400, "invalid_grant", "Wrong username or password.") }
         let store = MemoryTokenStore()

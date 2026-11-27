@@ -80,7 +80,8 @@ below are from the parent repository's root.
   (`KnownServers`, `ServerChooser` over the app's `ServerService` and `AccountSession`), and the
   proxy headers (`CustomHeaderRules`; `CustomHeaderInterceptor` puts them on every request to the
   server's host and port, through `SovEmuAPI`'s and `TokenClient`'s `customHeaders`, never logged).
-  The app does not use them yet (the Apple TV app will, #38).
+  The Apple TV app uses them through `Apps/TV/TVSession.swift`, which drives `AppModel` (the
+  active account's client) for the shared screens; the iPhone app keeps its one sign-in.
 
 ## Before a PR
 
