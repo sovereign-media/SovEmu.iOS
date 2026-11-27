@@ -201,6 +201,15 @@ final class Controller {
         return out
     }
 
+    /// While a game plays, a controller's Home button opens SovEmu's menu (as Select+Start does)
+    /// instead of the system's: Apple TV's Control Center, or an iPad's Home Screen. The system
+    /// keeps it everywhere else, and keeps a long press (Apple TV's own rule).
+    static func claimHome(_ claim: Bool) {
+        for controller in GCController.controllers() {
+            controller.extendedGamepad?.buttonHome?.preferredSystemGestureState = claim ? .disabled : .enabled
+        }
+    }
+
     /// Whether a controller (not the remote) has anything held: a command tvOS raised just now
     /// came from it, and the game or the polled menu has it already.
     static func padActive() -> Bool {

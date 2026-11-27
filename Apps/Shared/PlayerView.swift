@@ -224,7 +224,11 @@ struct PlayerView: View {
             history.clear()
             if !on { statsRows = nil }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in showTouch = false }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in
+            showTouch = false
+            Controller.claimHome(true)
+        }
+        .onAppear { Controller.claimHome(true) }
         .onReceive(NotificationCenter.default.publisher(for: .GCKeyboardDidConnect)) { _ in showTouch = false }
         .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in
             // The touch controls come back once nothing else is left to play with.
@@ -677,6 +681,7 @@ struct PlayerView: View {
     /// Leaving, however it happens: the stream closes and the session stops once it has started
     /// (if it does), so its worker writes the saves and exits.
     private func leave() {
+        Controller.claimHome(false)
         stream?.close()
         controller.clear()
         guard let api = model.api, let starting else { return }
