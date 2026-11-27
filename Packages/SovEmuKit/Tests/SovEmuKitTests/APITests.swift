@@ -68,18 +68,29 @@ struct APITests {
         #expect(setup.setupRequired && setup.user == nil)
     }
 
+    /// The TV draws the admin's background behind every screen; none is a plain surface.
+    @Test func readsTheBackground() async throws {
+        let chosen = try await api(#"{"data":{"background":{"id":"dots","url":"/media/backgrounds/dots.png?sig=1"}}}"#).0.background()
+        #expect(chosen == "/media/backgrounds/dots.png?sig=1")
+        let none = try await api(#"{"data":{"background":null}}"#).0.background()
+        #expect(none == nil)
+    }
+
     @Test func readsSystems() async throws {
         let systems = try await api("""
             {"data":{"systems":[{"id":"nes","name":"Nintendo Entertainment System","short":"NES",
              "manufacturer":"Nintendo","year":1983,"color":"#c0392b","gameCount":2,"playable":true,
-             "needsGpu":false,"rendering":null,"biosMissing":false,"boxAspect":0.72},
+             "needsGpu":false,"rendering":null,"biosMissing":false,"boxAspect":0.72,
+             "photoUrl":"/media/systems/nes.png?sig=1"},
              {"id":"n64","name":"Nintendo 64","short":"N64","manufacturer":"Nintendo","year":1996,
              "color":"#2c3e50","gameCount":0,"playable":true,"needsGpu":true,"rendering":"SOFTWARE",
-             "biosMissing":true,"boxAspect":1.38}]}}
+             "biosMissing":true,"boxAspect":1.38,"photoUrl":null}]}}
             """).0.systems()
         #expect(systems[0].gameCount == 2 && systems[0].boxAspect == 0.72)
         #expect(systems[0].rgb.0 > 0.75 && systems[0].rgb.2 < 0.25)
         #expect(systems[1].needsGpu && systems[1].rendering == "SOFTWARE" && systems[1].biosMissing)
+        // The TV's system cards draw the server's photo of the hardware where there is one.
+        #expect(systems[0].photoUrl == "/media/systems/nes.png?sig=1" && systems[1].photoUrl == nil)
     }
 
     @Test func readsGamesAndTellsAMissingSystem() async throws {

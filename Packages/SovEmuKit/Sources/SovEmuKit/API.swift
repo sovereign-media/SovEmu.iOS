@@ -132,14 +132,17 @@ public struct SystemSummary: Codable, Sendable, Identifiable, Hashable {
     /// The shape of its games' boxes, width over height (SNES landscape, NES portrait): its game
     /// cards take it, so box art fills them.
     public let boxAspect: Double
-
+    /// The server's photo of the hardware (a `/media/…` path), drawn on the system's card; none
+    /// before the admin fetches system photos.
+    public let photoUrl: String?
 
     public init(
         id: String, name: String, short: String, manufacturer: String = "", year: Int = 0, color: String = "#4169e1",
         gameCount: Int = 0, playable: Bool = true, needsGpu: Bool = false, rendering: String? = nil, biosMissing: Bool = false,
-        boxAspect: Double = defaultBoxAspect
+        boxAspect: Double = defaultBoxAspect, photoUrl: String? = nil
     ) {
         self.boxAspect = boxAspect
+        self.photoUrl = photoUrl
         (self.id, self.name, self.short, self.manufacturer, self.year, self.color) = (id, name, short, manufacturer, year, color)
         (self.gameCount, self.playable, self.needsGpu, self.rendering, self.biosMissing) =
             (gameCount, playable, needsGpu, rendering, biosMissing)
@@ -522,6 +525,11 @@ public final class SovEmuAPI: Sendable {
     public func config() async throws -> ClientConfig {
         try ClientConfig(try await fetch(SovEmuGraphQL.ClientConfigQuery()).clientConfig)
     }
+    /// The background the admin chose for every screen (a `/media/…` path); nil for none.
+    public func background() async throws -> String? {
+        try await fetch(SovEmuGraphQL.BackgroundQuery()).background?.url
+    }
+
     public func systems() async throws -> [SystemSummary] {
         try await fetch(SovEmuGraphQL.SystemsQuery()).systems.map { SystemSummary($0.fragments.systemFields) }
     }
