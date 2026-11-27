@@ -6,3 +6,4 @@ DerivedData/
 .swiftpm/
 xcuserdata/
 Packages/WebRTC/WebRTC.xcframework/
+Packages/WebRTC/LiveKitWebRTC.xcframework/
