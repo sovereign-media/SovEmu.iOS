@@ -45,6 +45,8 @@ struct RootView: View {
                 playing = nil
             }
             .onDisappear { library.played(request.system.id) }
+            // Only the player ends the game (its menu's Quit): never tvOS's Back on the cover.
+            .interactiveDismissDisabled()
         }
         .task {
             // Ask how to sign in first, each launch the server answers; offline, the stored

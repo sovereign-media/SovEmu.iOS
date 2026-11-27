@@ -48,6 +48,9 @@ final class Controller {
     private var store = Mappings(system: "")
     private var identities: [ObjectIdentifier: ControllerIdentity] = [:]
     private var observers: [NSObjectProtocol] = []
+    /// When a controller last had anything held (system uptime, seconds), under `lock`: `read()`
+    /// sets it every few milliseconds while one plays.
+    private var padHeldAt: TimeInterval = -.infinity
 
     init() {
         // Controllers already connected join in GameController's order.
@@ -210,13 +213,18 @@ final class Controller {
         }
     }
 
-    /// Whether a controller (not the remote) has anything held: a command tvOS raised just now
-    /// came from it, and the game or the polled menu has it already.
-    static func padActive() -> Bool {
-        GCController.controllers().contains { controller in
+    /// Whether a controller (not the remote) has had anything held in the last `within`
+    /// seconds: a command tvOS raised then came from it (its B is Back, its X Play/Pause), and
+    /// the game or the polled menu has it already. Asked a moment after the command, for tvOS
+    /// can raise it before GameController reports the press, and a tap may be over by then.
+    func padActive(within: TimeInterval = 0.3) -> Bool {
+        let heldNow = GCController.controllers().contains { controller in
             guard let pad = controller.extendedGamepad else { return false }
-            return !pressedInputs(pad).isEmpty || !stickDirections(pad).isEmpty
+            return !Self.pressedInputs(pad).isEmpty || !Self.stickDirections(pad).isEmpty
         }
+        lock.lock()
+        defer { lock.unlock() }
+        return heldNow || ProcessInfo.processInfo.systemUptime - padHeldAt < within
     }
 
     // MARK: The Siri Remote
@@ -283,6 +291,12 @@ final class Controller {
         }
         lock.unlock()
 
+        let padHeld = pads.contains { !Self.pressedInputs($0.0).isEmpty || !Self.stickDirections($0.0).isEmpty }
+        if padHeld {
+            lock.lock()
+            padHeldAt = ProcessInfo.processInfo.systemUptime
+            lock.unlock()
+        }
         for (pad, port, mapping) in pads {
             let hotkeys = HotkeyReading.read(mapping.state(Self.pressedInputs(pad)))
             fastForward = fastForward || hotkeys.fastForward

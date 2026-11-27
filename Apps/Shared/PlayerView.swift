@@ -119,6 +119,11 @@ struct PlayerView: View {
     @State private var controls: ControlsInfo?
     /// The whole frame, stretched to the console's shape (the box it is in): never cropped.
     @State private var video = SampleBufferVideoView(frame: .zero)
+    #if os(tvOS)
+    /// The player holds tvOS's focus for as long as it is on screen: with nothing focused, Back
+    /// (a controller's B, every few seconds in a game) reaches the cover and ends the game.
+    @FocusState private var holdsFocus: Bool
+    #endif
 
     private static var hasInputDevice: Bool { !GCController.controllers().isEmpty || GCKeyboard.coalesced != nil }
 
@@ -188,6 +193,13 @@ struct PlayerView: View {
         }
         .playerChrome()
         #if os(tvOS)
+        .focused($holdsFocus)
+        .onAppear { holdsFocus = true }
+        .onChange(of: holdsFocus) { _, held in
+            // Only the cheat code's text field may take it (its alert gives it back).
+            if !held && !addingCheat { holdsFocus = true }
+        }
+        .onChange(of: addingCheat) { _, adding in if !adding { holdsFocus = true } }
         // The remote, through tvOS's commands (GameController does not see it on an Apple TV):
         // Back or Play/Pause opens the menu; in the menu the click pad moves, a click chooses and
         // Back goes back. A controller raises the same commands, but it plays the game and
@@ -343,7 +355,16 @@ struct PlayerView: View {
     /// An action from the remote: in play, Back opens the menu; in the menu, every action is the
     /// menu's.
     private func remote(_ action: MenuAction) {
-        guard !Controller.padActive() else { return }
+        // A controller raises these commands too, sometimes before GameController has its press:
+        // decide a moment later, when the press (if it was a controller's) has been read.
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(60)) // Cancelled only with the view: nothing to do.
+            remoteNow(action)
+        }
+    }
+
+    private func remoteNow(_ action: MenuAction) {
+        guard !controller.padActive() else { return }
         if !menuOpen {
             // A controller's B that closed the menu also raises Back: that copy must not reopen it.
             if action == .back, gameMenu?.isEcho(.back, polled: false) != true { menuOpen = true }
