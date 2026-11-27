@@ -62,7 +62,7 @@ actor ArtCache {
 /// loads (a binding, not a closure, so a trailing closure stays `onLoaded`). `onLoaded` says
 /// whether it drew.
 struct RemoteImage: View {
-    @Environment(AppModel.self) private var model
+    @Environment(\.api) private var api
     let path: String?
     var contentMode: ContentMode = .fill
     var pixelated = false
@@ -83,7 +83,7 @@ struct RemoteImage: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
         .task(id: path) {
-            guard let url = model.api?.media(path) else {
+            guard let url = api?.media(path) else {
                 image = nil
                 onLoaded?(false)
                 return
@@ -94,4 +94,10 @@ struct RemoteImage: View {
             onLoaded?(loaded != nil)
         }
     }
+}
+
+extension EnvironmentValues {
+    /// The signed-in server's client, for what draws from the server (`RemoteImage`): each app's
+    /// root sets it from its own model.
+    @Entry var api: SovEmuAPI? = nil
 }

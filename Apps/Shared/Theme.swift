@@ -193,3 +193,10 @@ func initials(_ name: String) -> String {
     let letters = parts.count > 1 ? "\(parts[0].prefix(1))\(parts[1].prefix(1))" : String((parts.first ?? "?").prefix(1))
     return letters.uppercased()
 }
+
+extension SystemSummary {
+    var accent: Color {
+        let (r, g, b) = rgb
+        return Color(red: r, green: g, blue: b)
+    }
+}

@@ -106,7 +106,7 @@ private struct CodeWords: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(PairingText.goTo).foregroundStyle(.secondary)
-            Text(code.shownURI).font(.headline).textSelection(.enabled).fixedSize()
+            Text(code.shownURI).font(.headline).selectable().fixedSize()
             Text(PairingText.enter).foregroundStyle(.secondary).padding(.top, 6)
             Text(code.grouped).font(.system(size: 34, weight: .bold, design: .monospaced)).fixedSize()
                 .accessibilityLabel(code.grouped.map(String.init).joined(separator: " "))
@@ -134,5 +134,16 @@ private struct QRCodeImage: View {
         filter.correctionLevel = "M"
         guard let output = filter.outputImage else { return nil }
         return context.createCGImage(output, from: output.extent)
+    }
+}
+
+private extension View {
+    /// Selectable text where there is a pointer or touch to select it with (not on a TV).
+    @ViewBuilder func selectable() -> some View {
+        #if os(tvOS)
+        self
+        #else
+        textSelection(.enabled)
+        #endif
     }
 }
