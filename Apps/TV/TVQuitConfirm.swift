@@ -20,8 +20,8 @@ struct TVQuitConfirm: View {
             VStack(alignment: .leading, spacing: dp(20)) {
                 Text(title).font(.system(size: dp(20), weight: .bold)).foregroundStyle(.white)
                 HStack(spacing: dp(12)) {
-                    Button("Stay", action: onStay).buttonStyle(TVSovButtonStyle()).focused($stay)
-                    Button("Quit", action: onQuit).buttonStyle(TVSovButtonStyle(variant: .outline))
+                    Button("Stay", action: onStay).buttonStyle(TVMenuButtonStyle()).focused($stay)
+                    Button("Quit", action: onQuit).buttonStyle(TVMenuButtonStyle(variant: .outline))
                 }
             }
             .padding(dp(24))

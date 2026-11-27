@@ -78,7 +78,7 @@ struct TVControllerList: View {
                 TVButtonLabel(title: "Buttons", symbol: "slider.horizontal.3", variant: .glass, focused: focused, large: false, wide: false)
             }
             HStack(spacing: dp(6)) {
-                TVEyebrow(text: "Player").padding(.trailing, dp(6))
+                TVMenuEyebrow(text: "Player").padding(.trailing, dp(6))
                 ForEach(0..<WireProtocol.maxPorts, id: \.self) { port in
                     PlayerToggle(number: port + 1, on: device.port == port)
                 }

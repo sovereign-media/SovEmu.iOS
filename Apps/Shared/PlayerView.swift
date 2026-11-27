@@ -770,9 +770,9 @@ private struct Splash: View {
             if chooser.asking {
                 HStack(spacing: sized(8)) {
                     #if os(tvOS)
-                    Button("Continue") { chooser.choose(.continue) }.buttonStyle(TVSovButtonStyle(symbol: "play.fill"))
+                    Button("Continue") { chooser.choose(.continue) }.buttonStyle(TVMenuButtonStyle(symbol: "play.fill"))
                     Button("Start over") { chooser.choose(.new) }
-                        .buttonStyle(TVSovButtonStyle(variant: .outline, symbol: "arrow.counterclockwise"))
+                        .buttonStyle(TVMenuButtonStyle(variant: .outline, symbol: "arrow.counterclockwise"))
                     #else
                     Button { chooser.choose(.continue) } label: { Label("Continue", systemImage: "play.fill") }.buttonStyle(.sov())
                     Button { chooser.choose(.new) } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
@@ -796,7 +796,7 @@ private struct Splash: View {
                 HStack(alignment: .bottom, spacing: sized(24)) {
                     VStack(alignment: .leading, spacing: sized(8)) {
                         #if os(tvOS)
-                        TVSystemBadge(short: system.short, colour: system.accent, large: true)
+                        TVMenuBadge(short: system.short, colour: system.accent, large: true)
                         #else
                         SystemBadge(short: system.short, colour: system.accent)
                         #endif

@@ -76,7 +76,7 @@ struct MainView: View {
         case .systems:
             NavigationStack(path: $systems) {
                 Group {
-                    if let system { SystemView(system: system, openFirst: nil) } else { Color.clear }
+                    if let system { TVSystemView(system: system, openFirst: nil) } else { Color.clear }
                 }
                 .routes()
                 .backToDock(systems.isEmpty) { docked = .systems }
@@ -356,7 +356,7 @@ extension View {
     func routes() -> some View {
         navigationDestination(for: Route.self) { route in
             switch route {
-            case .system(let system, let open): SystemView(system: system, openFirst: open)
+            case .system(let system, let open): TVSystemView(system: system, openFirst: open)
             }
         }
     }

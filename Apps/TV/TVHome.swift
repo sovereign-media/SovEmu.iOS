@@ -75,22 +75,21 @@ private struct TVHomeContent: View {
             reopen = nil
             resumeId = id
         }
-        .sidePanel(isPresented: Binding(get: { resumeId != nil }, set: { if !$0 { closeResume() } })) {
-            if let game = feed.recent.first(where: { $0.id == resumeId }) {
-                let system = library.system(game.system)
-                ContinuePanel(
-                    game: game, system: system,
-                    onPlay: { start in if let system { play(system, game, start) } },
-                    onDetails: {
-                        guard let system else { return }
-                        reopen = game.id
-                        resumeId = nil
-                        path.append(.system(system, open: game.id))
-                    },
-                    onClose: closeResume)
-            }
-        }
+        .tvContinuePanel(
+            game: resumeGame, system: resumeGame.flatMap { library.system($0.system) },
+            onPlay: { start in
+                if let game = resumeGame, let system = library.system(game.system) { play(system, game, start) }
+            },
+            onDetails: {
+                guard let game = resumeGame, let system = library.system(game.system) else { return }
+                reopen = game.id
+                resumeId = nil
+                path.append(.system(system, open: game.id))
+            },
+            onClose: closeResume)
     }
+
+    private var resumeGame: Game? { feed.recent.first { $0.id == resumeId } }
 
     /// A row of game cards that open the game's panel on its system's page.
     @ViewBuilder private func games(_ title: String, _ symbol: String, _ key: String, _ games: [Game]) -> some View {

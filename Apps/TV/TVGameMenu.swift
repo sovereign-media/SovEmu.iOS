@@ -29,7 +29,7 @@ struct TVGameMenu: View {
     var body: some View {
         VStack(alignment: .leading, spacing: dp(2)) {
             HStack(spacing: dp(8)) {
-                TVSystemBadge(short: system.short, colour: system.accent)
+                TVMenuBadge(short: system.short, colour: system.accent)
                 Text(title).font(.system(size: dp(16), weight: .bold)).foregroundStyle(.white).lineLimit(1)
             }
             .padding(dp(8))
@@ -92,7 +92,7 @@ struct TVGameMenu: View {
             }
         }
         Rectangle().fill(Sov.edge).frame(height: dp(1)).padding(.vertical, dp(6))
-        TVEyebrow(text: "Add a cheat").padding(.horizontal, dp(8))
+        TVMenuEyebrow(text: "Add a cheat").padding(.horizontal, dp(8))
         if let add {
             TVButtonLabel(title: items[add].title, symbol: "checkmark", focused: add == focus, large: false)
                 .padding(.top, dp(4))
@@ -203,7 +203,7 @@ private struct TVSwitch: View {
 // MARK: - The design system's pieces, at the TV's size
 
 /// The system's coloured badge ("SNES"), as Android's `SystemBadge`.
-struct TVSystemBadge: View {
+struct TVMenuBadge: View {
     let short: String
     let colour: Color
     var large = false
@@ -218,7 +218,7 @@ struct TVSystemBadge: View {
 }
 
 /// The uppercase label over a section, as Android's `Eyebrow`.
-struct TVEyebrow: View {
+struct TVMenuEyebrow: View {
     let text: String
 
     var body: some View {
@@ -267,7 +267,7 @@ struct TVButtonLabel: View {
 
 /// `TVButtonLabel` for a real button, which tvOS's focus engine drives (the loading screen's
 /// Continue / Start over, the quit question).
-struct TVSovButtonStyle: ButtonStyle {
+struct TVMenuButtonStyle: ButtonStyle {
     var variant = TVButtonLabel.Variant.primary
     var symbol: String?
 
