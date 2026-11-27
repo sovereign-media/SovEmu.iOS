@@ -2998,12 +2998,14 @@ type SessionFailure {
 	"""
 	`refused` (the server would not start it: no core, a missing file, no 3D rendering, every
 	port in use), `error`, `crashed` (a signal: in the core, most often), `killed` (it would
-	not stop, or its start timed out) or `exited` (it left while loading without saying why).
+	not stop, or its start timed out), `over_limit` (it went over its memory or thread limit:
+	`message` says which) or `exited` (it left while loading without saying why).
 	"""
 	reason: String!
 	"""
-	What went wrong, in words: why the server refused it, or why its start failed; null for
-	a failure while playing (its last lines say what there is).
+	What went wrong, in words: why the server refused it, why its start failed, or which
+	limit it went over; null for any other failure while playing (its last lines say what
+	there is).
 	"""
 	message: String
 	exitCode: Int
