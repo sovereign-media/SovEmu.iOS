@@ -44,13 +44,19 @@ final class Stream: NSObject {
     /// sends one (an older server never does). Set on the main thread, for a stats overlay.
     private(set) var pipeline: WireProtocol.Pipeline?
     var onPipeline: ((WireProtocol.Pipeline) -> Void)?
+    /// The worker's check of the connection before the stream starts (`0x83`, #243), the latest
+    /// it sent; nil until it has (an older worker never does). Set on the main thread.
+    private(set) var link: WireProtocol.Link?
+    /// The check moved on: the loading screen follows it. Called on the main thread.
+    var onLink: ((WireProtocol.Link) -> Void)?
     /// The worker changed the stream's quality: the notice to show (`qualityNotice`). Called on
     /// the main thread.
     var onQuality: ((WireProtocol.QualityNotice) -> Void)?
     /// The game's first picture reached the screen. Called once, on the main thread.
     var onFirstFrame: (() -> Void)?
-    /// Each second's stats, as sent to the worker. Called on the main thread.
-    var onStats: ((WireProtocol.Stats) -> Void)?
+    /// Each second's stats, as sent to the worker, and the reading they came from. Called on the
+    /// main thread.
+    var onStats: ((WireProtocol.Stats, StatsReading) -> Void)?
     private var menuHeld = false
 
     /// Button to frame, measured from the worker's acks and the frames shown after them.
@@ -123,9 +129,11 @@ final class Stream: NSObject {
         await MainActor.run { self.startStats() }
     }
 
-    /// Sends this client's view of the stream to the worker once a second while it plays: the
-    /// worker lowers the video bitrate for a device that is not keeping up, which its estimate
-    /// of the connection cannot see.
+    /// Sends this client's view of the stream to the worker once a second from the moment the
+    /// channel opens: before any video, while the worker checks the connection, the round trip
+    /// and the path it judges the link by (#243); then, while it plays, how this device keeps up,
+    /// for the worker lowers the video bitrate for one that does not, which its estimate of the
+    /// connection cannot see.
     private func startStats() {
         guard !closed else { return }
         statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -137,7 +145,7 @@ final class Stream: NSObject {
                     let stats = self.sampler.sample(reading, client: self.clientName, inputRtts: self.inputRtts,
                                                     inputToFrameMs: self.frameLatency.medianMs())
                     self.send(WireProtocol.encodeStats(stats))
-                    self.onStats?(stats)
+                    self.onStats?(stats, reading)
                 }
             }
         }
@@ -150,10 +158,20 @@ final class Stream: NSObject {
         }
         let video = inbound("video")
         let audio = inbound("audio")
-        let pair = all.first {
+        // The transport's selected pair, as the web's `selectedPair`; else the nominated one
+        // that succeeded.
+        let selectedId = all.first { $0.type == "transport" && $0.values["selectedCandidatePairId"] != nil }?
+            .values["selectedCandidatePairId"] as? String
+        let pair = (selectedId.flatMap { report.statistics[$0]?.values } ?? all.first {
             $0.type == "candidate-pair" && ($0.values["nominated"] as? NSNumber)?.boolValue == true
                 && $0.values["state"] as? String == "succeeded"
-        }?.values ?? [:]
+        }?.values) ?? [:]
+        func candidate(_ key: String) -> IceCandidateStats? {
+            guard let id = pair[key] as? String, let values = report.statistics[id]?.values,
+                  let type = values["candidateType"] as? String else { return nil }
+            return IceCandidateStats(candidateType: type, protocol: values["protocol"] as? String,
+                                     relayProtocol: values["relayProtocol"] as? String)
+        }
         func num(_ values: [String: NSObject], _ key: String) -> Double? { (values[key] as? NSNumber)?.doubleValue }
         return StatsReading(
             at: report.timestamp_us / 1_000_000,
@@ -168,7 +186,10 @@ final class Stream: NSObject {
             packetsLost: Int((num(video, "packetsLost") ?? 0) + (num(audio, "packetsLost") ?? 0)),
             framesDropped: num(video, "framesDropped").map { Int($0) },
             networkRttMs: num(pair, "currentRoundTripTime").map { $0 * 1000 },
-            decoder: video["decoderImplementation"] as? String)
+            decoder: video["decoderImplementation"] as? String,
+            hasVideo: !video.isEmpty,
+            local: candidate("localCandidateId"),
+            remote: candidate("remoteCandidateId"))
     }
 
     /// Sends the controller state every 4 ms when it changes and at least every 100 ms.
@@ -276,22 +297,36 @@ extension Stream: RTCPeerConnectionDelegate {
 
 extension Stream: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
-    /// The worker sends acks (`0x81`) and its pipeline (`0x82`); anything else, or a message that
-    /// does not decode, is ignored.
+    /// The worker sends acks (`0x81`), its pipeline (`0x82`) and its check of the connection
+    /// (`0x83`); anything else, or a message that does not decode, is ignored.
     func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard buffer.isBinary else { return }
         if let ack = WireProtocol.decodeAck(buffer.data) {
             acked(ack)
             return
         }
+        if let link = WireProtocol.decodeLink(buffer.data) {
+            DispatchQueue.main.async { self.setLink(link) }
+            return
+        }
         guard let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
         DispatchQueue.main.async {
+            // The check's result comes again with the pipeline: a lost `0x83` is not missed.
+            if let link = pipeline.link, self.link?.state != WireProtocol.Link.done { self.setLink(link) }
             guard pipeline != self.pipeline else { return }
             let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
             self.pipeline = pipeline
             if let notice { self.onQuality?(notice) }
             self.onPipeline?(pipeline)
         }
+    }
+}
+
+extension Stream {
+    /// On the main thread.
+    fileprivate func setLink(_ link: WireProtocol.Link) {
+        self.link = link
+        onLink?(link)
     }
 }
 

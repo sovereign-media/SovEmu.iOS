@@ -67,6 +67,10 @@ struct PlayerView: View {
     @State private var progress: StartStatus?
     @State private var bar = 0.0
     @State private var pictureShown = false
+    /// The worker's check of the connection before the stream starts (`0x83`), as it last said.
+    @State private var link: WireProtocol.Link?
+    /// The screenshot of the save being continued: the loading screen's background.
+    @State private var saveShot: String?
     /// How long the ready session has waited for its first picture.
     @State private var waitedMs: Int64 = 0
     @State private var chooser = Chooser()
@@ -110,8 +114,12 @@ struct PlayerView: View {
             Decorated(decoration: decoration, aspect: aspect) { VideoView(view: video) }
                 .ignoresSafeArea()
             if let screen = GameStart.screen(title: game.title, error: error, progress: progress, bar: bar, ready: session != nil,
-                                             pictureShown: pictureShown, waitedMs: waitedMs) ?? (chooser.asking ? StartScreen(label: "") : nil) {
-                Splash(game: game, system: system, screen: screen, chooser: chooser)
+                                             link: link, pictureShown: pictureShown, waitedMs: waitedMs)
+                ?? (chooser.asking ? StartScreen(label: "") : nil) {
+                Splash(game: game, system: system, screen: screen, chooser: chooser,
+                       background: loadingBackground(saveShot: saveShot, image: game.image, boxArt: game.cover ?? game.thumb),
+                       status: session.map { loadingStatus(core: $0.core, width: $0.width, height: $0.height, fps: $0.fps) } ?? "",
+                       network: LinkLabels.networkLabel(link?.path ?? ""))
             }
             if showTouch && !menuOpen && session != nil && error == nil { TouchControls(controller: controller) }
             if let statsRows {
@@ -413,10 +421,14 @@ struct PlayerView: View {
         async let info = try? api.controls(system: system.id)
         do {
             var how = start
+            // Nil when not asked for: a missing list only leaves the loading screen without the
+            // save's screenshot, and asking treats it as no auto save.
+            var saves: [SaveSlot]?
             if how == .ask {
-                let saves = (try? await api.saves(gameId: game.id)) ?? []
-                how = saves.contains { $0.slot == autoSlot } ? await chooser.ask() : .new
+                saves = try? await api.saves(gameId: game.id)
+                how = (saves ?? []).contains { $0.slot == autoSlot } ? await chooser.ask() : .new
             }
+            if case .fromSlot(let slot) = how { showSaveShot(slot: slot, saves: saves, api: api) }
             // The mappings in force on this system (and on every system, for remapping); a
             // model without one, or no answer, uses the built-in defaults.
             controller.mappings = await mappings ?? Mappings(system: system.id)
@@ -434,9 +446,15 @@ struct PlayerView: View {
                            videoView: video)
             s.onQuality = { showQuality($0) }
             s.onFirstFrame = { pictureShown = true }
-            s.onStats = { stats in
+            s.onLink = { l in
+                link = l
+                // A check started again (the selected pair changed) does not take the bar back.
+                if l.state == WireProtocol.Link.probing { bar = max(bar, describeLink(l).fraction) }
+            }
+            s.onStats = { stats, reading in
                 guard settings.stats else { return }
-                statsRows = stats.rows() + WireProtocol.pipelineRows(s.pipeline, decoder: stats.decoder)
+                statsRows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
+                guard reading.hasVideo else { return }
                 history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
             }
             s.onState = { state in
@@ -457,6 +475,22 @@ struct PlayerView: View {
         } catch {
             self.error = "Could not start: \(error.localizedDescription)"
         }
+    }
+
+    /// The screenshot of the save the game continues from, behind the loading screen: the auto
+    /// save's comes with the game; another slot's from the list, fetched if it was not already.
+    private func showSaveShot(slot: Int, saves: [SaveSlot]?, api: SovEmuAPI) {
+        if slot == autoSlot, let shot = game.autoSave?.screenshotUrl {
+            saveShot = shot
+            return
+        }
+        if let saves {
+            saveShot = saves.first { $0.slot == slot }?.screenshotUrl
+            return
+        }
+        let gameId = game.id
+        // Without the list the screen falls back to the game's own picture: nothing to report.
+        Task { saveShot = (try? await api.saves(gameId: gameId))?.first { $0.slot == slot }?.screenshotUrl }
     }
 
     /// The start's progress, polled four times a second while the session starts. A failed poll
@@ -572,43 +606,105 @@ struct Decorated<Picture: View>: View {
     }
 }
 
-/// While the game loads: its artwork, title and what is happening, and Continue / Start over
-/// when asked.
+/// While the game loads, as the other clients' loading screen (#243, SovEmu.Web's
+/// `LoadingScreen.tsx`, SovEmu.Android's `Splash`): a darkened picture behind, full bleed (the save
+/// being continued, the game, its box blurred, or the system's colour), the bar dead centre with
+/// what the start is doing, where the player is in a chip top right, the game bottom left, and a
+/// spinner bottom right, which a failure replaces with the alert. Continue / Start over, when
+/// asked, takes the bar's place.
 private struct Splash: View {
     let game: Game
     let system: SystemSummary
     let screen: StartScreen
     let chooser: Chooser
+    let background: LoadingBackground?
+    /// `FCEUmm · 256×224 @ 60.10 fps`, once the emulator is up.
+    let status: String
+    /// `Home network` or `Remote`, once the worker has checked the connection.
+    let network: String?
+
+    /// A start that failed (or a lost connection): it has a line to say and no bar.
+    private var failed: Bool { screen.fraction == nil && !screen.label.isEmpty }
 
     var body: some View {
         ZStack {
-            Sov.surface
-            tile(system.accent, mix: 0.25).opacity(0.35)
-            RemoteImage(path: game.image ?? game.thumb).opacity(0.25).blur(radius: game.image == nil ? 20 : 0)
-            VStack(spacing: 16) {
-                SystemBadge(short: system.short, colour: system.accent)
-                Text(game.title).font(.system(size: 32, weight: .black)).foregroundStyle(.white).multilineTextAlignment(.center)
-                if chooser.asking {
-                    HStack(spacing: 8) {
-                        Button { chooser.choose(.continue) } label: { Label("Continue", systemImage: "play.fill") }.buttonStyle(.sov())
-                        Button { chooser.choose(.new) } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
-                            .buttonStyle(.sov(.outline))
-                    }
-                } else {
-                    if let fraction = screen.fraction {
-                        ProgressView(value: fraction).progressViewStyle(.linear).tint(Sov.accent).frame(maxWidth: 400)
-                            .animation(.easeOut(duration: 0.25), value: fraction)
-                    }
-                    Text(screen.label).font(.system(size: 20, weight: .semibold)).foregroundStyle(Sov.slate100).multilineTextAlignment(.center)
-                    if !screen.detail.isEmpty {
-                        Text(screen.detail).font(.system(size: 16)).foregroundStyle(Sov.slate400).multilineTextAlignment(.center)
+            backdrop.ignoresSafeArea()
+            if chooser.asking {
+                HStack(spacing: 8) {
+                    Button { chooser.choose(.continue) } label: { Label("Continue", systemImage: "play.fill") }.buttonStyle(.sov())
+                    Button { chooser.choose(.new) } label: { Label("Start over", systemImage: "arrow.counterclockwise") }
+                        .buttonStyle(.sov(.outline))
+                }
+                .padding(24)
+            } else {
+                progress.padding(.horizontal, 24)
+            }
+            if let network {
+                Text(network).font(.system(size: 14, weight: .semibold)).foregroundStyle(Sov.slate100)
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .padding(24)
+            }
+            HStack(alignment: .bottom, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    SystemBadge(short: system.short, colour: system.accent)
+                    Text(game.title).font(.system(size: 32, weight: .black)).foregroundStyle(.white).lineLimit(1)
+                    if !status.isEmpty {
+                        Text(status).font(.system(size: 14)).monospacedDigit().foregroundStyle(Sov.slate300)
                     }
                 }
+                Spacer(minLength: 0)
+                if failed {
+                    Image(systemName: "exclamationmark.circle").font(.system(size: 36)).foregroundStyle(Sov.red300)
+                } else {
+                    ProgressView().controlSize(.large).tint(.white.opacity(0.8))
+                }
             }
-            .padding(32)
-            .frame(maxWidth: 560)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .padding(24)
         }
-        .ignoresSafeArea()
+    }
+
+    /// The picture, then an even black scrim at 55%, deepening to about 80% along the bottom
+    /// where the text and the spinner sit.
+    private var backdrop: some View {
+        ZStack {
+            Sov.surface
+            if let background {
+                RemoteImage(path: background.url, pixelated: background.pixelated)
+                    .blur(radius: background.blurred ? 24 : 0)
+                    .scaleEffect(background.blurred ? 1.1 : 1)
+            } else {
+                tile(system.accent, mix: 0.25)
+            }
+            Color.black.opacity(0.55)
+            GeometryReader { geo in
+                LinearGradient(colors: [.black.opacity(0.55), .clear], startPoint: .bottom, endPoint: .top)
+                    .frame(height: geo.size.height * 0.4)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+            }
+        }
+        .clipped()
+    }
+
+    /// The bar, what the start is doing, its detail and how to reach the menu, dead centre.
+    private var progress: some View {
+        VStack(spacing: 12) {
+            if let fraction = screen.fraction {
+                ProgressView(value: fraction).progressViewStyle(.linear).tint(Sov.accent).frame(maxWidth: 400)
+                    .animation(.easeOut(duration: 0.25), value: fraction)
+            }
+            Text(screen.label).font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(failed ? Sov.red300 : Sov.slate100).multilineTextAlignment(.center)
+            if !screen.detail.isEmpty {
+                Text(screen.detail).font(.system(size: 16)).monospacedDigit().foregroundStyle(Sov.slate300)
+                    .multilineTextAlignment(.center)
+            }
+            Text(loadingHint).font(.system(size: 13)).foregroundStyle(Sov.slate400)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

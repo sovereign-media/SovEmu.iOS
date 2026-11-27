@@ -227,7 +227,7 @@ struct GameStartTests {
         let half = describeStart(status(read: 32 * mib, total: 64 * mib, elapsedMs: 5000))
         #expect(half.label == "Loading the game")
         #expect(half.detail == "32 of 64 MB · 5 s")
-        #expect(abs(half.fraction - (0.18 + 0.79 / 2)) < 1e-9)
+        #expect(abs(half.fraction - (0.18 + 0.67 / 2)) < 1e-9)
     }
 
     @Test func itEasesForwardAndCountsBytesWhenTheTotalIsNotKnown() {
@@ -235,7 +235,7 @@ struct GameStartTests {
         let later = describeStart(status(read: 250 * mib, phaseMs: 30000))
         #expect(early.detail == "3 MB read")
         #expect(later.detail == "250 MB read")
-        #expect(later.fraction > early.fraction && later.fraction < 0.97)
+        #expect(later.fraction > early.fraction && later.fraction < 0.85)
     }
 
     @Test func megabytesKeepOneDecimalBelow100() {
@@ -246,7 +246,8 @@ struct GameStartTests {
     @Test func itNamesEveryPhaseAndReportsFailure() {
         #expect(describeStart(status(.stopping)).label == "Saving your last game")
         #expect(abs(describeStart(status(.core)).fraction - 0.12) < 1e-9)
-        #expect(describeStart(status(.ready)).fraction == 1)
+        // Ready leaves the bar's last stretch to checking the connection and the first picture.
+        #expect(describeStart(status(.ready)).fraction == 0.85)
         let failed = describeStart(status(.failed, error: "no core installed"))
         #expect([failed.label, failed.detail] == ["Could not start", "no core installed"])
         #expect(describeStart(status(.unknown)).fraction == 0, "a phase this app does not know leaves the bar alone")
@@ -264,15 +265,58 @@ struct GameStartTests {
     }
 
     @Test func waitingForTheFirstPictureCountsTheWaitAndSaysHowToLeave() {
-        #expect(describeFirstPicture(waitedMs: 500) == LaunchView(label: "Starting the game", detail: "", fraction: 1))
+        #expect(describeFirstPicture(waitedMs: 500) == LaunchView(label: "Starting the game", detail: "", fraction: 0.97))
         #expect(describeFirstPicture(waitedMs: 6200).detail == "6 s")
         #expect(describeFirstPicture(waitedMs: 21_000).detail == "21 s · still no picture: ☰ opens the menu")
     }
 
+    private func link(_ state: String = "probing", elapsedMs: Int = 0, budgetMs: Int = 2000, path: String = "")
+        -> WireProtocol.Link {
+        WireProtocol.Link(state: state, elapsedMs: elapsedMs, budgetMs: budgetMs, path: path)
+    }
+
+    @Test func checkingTheConnectionMovesTheBarFromReadyToAlmostFull() {
+        // The worker sends no video while it checks: without this stage the bar would sit at
+        // "Ready" for up to two seconds with nothing said.
+        #expect(abs(describeLink(link()).fraction - 0.85) < 1e-9)
+        #expect(abs(describeLink(link(elapsedMs: 1000)).fraction - 0.91) < 1e-9)
+        #expect(abs(describeLink(link(elapsedMs: 5000)).fraction - 0.97) < 1e-9)
+        #expect(abs(describeLink(link(budgetMs: 0)).fraction - 0.97) < 1e-9)
+        #expect(describeLink(link()).label == "Checking your connection")
+    }
+
+    @Test func itSaysItIsConnectingUntilTheWorkerIsReached() {
+        // Otherwise the screen read "Starting the game" for a second or two before it went back
+        // to checking the connection.
+        #expect(describeConnecting(waitedMs: 500) == LaunchView(label: "Connecting", detail: "", fraction: 0.85))
+        #expect(describeConnecting(waitedMs: 4200).detail == "4 s")
+    }
+
+    @Test func itLeavesWhereThePlayerIsToTheNetworkChip() {
+        // The chip in the corner says Home network or Remote; the bar's detail stays free for the wait.
+        #expect(describeLink(link(path: "lan")).detail == "")
+        #expect(describeFirstPicture(waitedMs: 4000).detail == "4 s")
+    }
+
+    @Test func theBackgroundShowsWhereThePlayerLeftOffElseTheGameElseItsBoxBlurred() {
+        // Continuing: the save's own screenshot, so the player sees where they will be.
+        #expect(loadingBackground(saveShot: "save.png", image: "shot.webp", boxArt: "box.webp")
+            == LoadingBackground(url: "save.png", pixelated: true, blurred: false))
+        #expect(loadingBackground(saveShot: nil, image: "shot.webp", boxArt: "box.webp")
+            == LoadingBackground(url: "shot.webp", pixelated: false, blurred: false))
+        #expect(loadingBackground(saveShot: "", image: nil, boxArt: "box.webp")
+            == LoadingBackground(url: "box.webp", pixelated: false, blurred: true))
+        #expect(loadingBackground(saveShot: nil, image: nil, boxArt: nil) == nil, "the system's colour")
+    }
+
+    @Test func theStatusLineNamesTheCoreAndThePictureAsTheWebDoes() {
+        #expect(loadingStatus(core: "FCEUmm", width: 256, height: 224, fps: 60.0988) == "FCEUmm · 256×224 @ 60.10 fps")
+    }
+
     private func screen(error: String? = nil, progress: StartStatus? = nil, bar: Double = 0, ready: Bool = false,
-                        pictureShown: Bool = false, waitedMs: Int64 = 0) -> StartScreen? {
-        GameStart.screen(title: "THPS3", error: error, progress: progress, bar: bar, ready: ready, pictureShown: pictureShown,
-                         waitedMs: waitedMs)
+                        link: WireProtocol.Link? = nil, pictureShown: Bool = false, waitedMs: Int64 = 0) -> StartScreen? {
+        GameStart.screen(title: "THPS3", error: error, progress: progress, bar: bar, ready: ready, link: link,
+                         pictureShown: pictureShown, waitedMs: waitedMs)
     }
 
     @Test func theScreenFollowsTheWholeStart() {
@@ -281,7 +325,14 @@ struct GameStartTests {
             == StartScreen(label: "Loading the game", detail: "32 of 64 MB · 5 s", fraction: 0.6))
         #expect(screen(progress: status(.failed, error: "no core installed"), bar: 0.4)
             == StartScreen(label: "Could not start", detail: "no core installed"))
-        #expect(screen(progress: status(.ready), ready: true) == StartScreen(label: "Starting the game", fraction: 1))
+        #expect(screen(progress: status(.ready), bar: 0.85, ready: true) == StartScreen(label: "Connecting", fraction: 0.85))
+        let checking = screen(ready: true, link: link(elapsedMs: 1000, path: "lan"))
+        #expect(checking?.label == "Checking your connection" && checking?.detail == "")
+        #expect(abs((checking?.fraction ?? 0) - 0.91) < 1e-9)
+        #expect(screen(ready: true, link: link("done", path: "relay-udp"))
+            == StartScreen(label: "Starting the game", fraction: 0.97))
+        // A check started again (the pair changed) does not take the bar back.
+        #expect(screen(bar: 0.95, ready: true, link: link(elapsedMs: 0))?.fraction == 0.95)
         #expect(screen(ready: true, pictureShown: true, waitedMs: 30_000) == nil, "the first picture ends it")
         #expect(screen(error: "Connection failed", ready: true, pictureShown: true) == StartScreen(label: "Connection failed"))
     }

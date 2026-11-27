@@ -58,8 +58,11 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
 
 **Playing:**
 - **Starting a game:** a loading bar follows the server's start (`startProgress`, four times a
-  second) and never moves back; once the session is ready the screen says "Starting the game"
-  until the first picture arrives, and after 20 s that ☰ opens the menu. Leaving at any point
+  second) and never moves back; once the session is ready it says "Connecting", then "Checking
+  your connection" while the worker measures the link, then "Starting the game" until the first
+  picture arrives, and after 20 s that ☰ opens the menu. The bar sits in the middle over the save
+  being continued, the game's picture or its box art, darkened; "Home network" or "Remote" in a
+  chip top right, the game's system, title and core bottom left, and a spinner bottom right. Leaving at any point
   stops the session, even one still starting. The picture keeps the console's shape (4:3, or a
   handheld's own) and is framed by its system's decoration when the screen is wider than it.
 - **In-game menu:** save to and load from four slots (and the auto save), each with its picture
@@ -67,10 +70,13 @@ open SovEmu.xcodeproj    # or: xcodebuild -scheme SovEmu -destination 'generic/p
   and delete them; controllers; stats; quit.
 - **Stats** (in-game menu; remembered): the same rows as the other clients (estimated
   button→pixel, measured button→frame, input round trip, network RTT, jitter buffer, decode,
-  resolution and fps, bitrate, packets lost, then how the server makes the stream), and a graph
+  resolution and fps, bitrate, packets lost, then how the server makes the stream, then the
+  Network rows: home or remote, TURN server, transport, path, what was measured at the start,
+  the rate it started at and the estimate now), and a graph
   of the last minute's latency. *Measured button→frame* times an input to the first frame shown
-  after the worker's ack. The stats go to the server every second either way, which lowers the
-  bitrate for a device that falls behind.
+  after the worker's ack. The stats go to the server every second either way, from connecting
+  (the round trip and the path, while it checks the connection), which lowers the bitrate for a
+  device that falls behind.
 - **Touch controls** appear when no controller or keyboard is connected, and go and come back as
   they connect and disconnect.
 

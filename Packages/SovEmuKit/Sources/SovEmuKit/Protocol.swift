@@ -13,8 +13,11 @@ public enum WireProtocol {
     static let typeAnalog: UInt8 = 0x03
     static let typeAck: UInt8 = 0x81
     static let typePipeline: UInt8 = 0x82
+    static let typeLink: UInt8 = 0x83
     /// The longest pipeline message, header included.
     public static let maxPipelineLength = 4096
+    /// The longest link message, header included.
+    public static let maxLinkLength = 1024
 
     public static func encodeInput(seq: UInt32, clientTimeMs: UInt32, ports: [UInt16]) -> Data {
         let ports = ports.prefix(maxPorts)
@@ -98,15 +101,20 @@ public enum WireProtocol {
         public var audio: Audio
         /// Frames the picture runs ahead of the game (0: off).
         public var runAhead: Int
+        /// The check of the connection before the stream started, once done: what the stats
+        /// overlay shows as measured at start. Nil while it runs, without one, or from an older
+        /// server.
+        public var link: Link?
 
         public init(renderer: String? = nil, rendererSoftware: Bool = false, video: Video = Video(),
-                    audio: Audio = Audio(), runAhead: Int = 0) {
+                    audio: Audio = Audio(), runAhead: Int = 0, link: Link? = nil) {
             (self.renderer, self.rendererSoftware, self.video, self.audio, self.runAhead) =
                 (renderer, rendererSoftware, video, audio, runAhead)
+            self.link = link
         }
 
         enum CodingKeys: String, CodingKey {
-            case renderer, video, audio
+            case renderer, video, audio, link
             case rendererSoftware = "renderer_software", runAhead = "run_ahead"
         }
 
@@ -117,6 +125,7 @@ public enum WireProtocol {
             video = try c.decodeIfPresent(Video.self, forKey: .video) ?? Video()
             audio = try c.decodeIfPresent(Audio.self, forKey: .audio) ?? Audio()
             runAhead = try c.decodeIfPresent(Int.self, forKey: .runAhead) ?? 0
+            link = try c.decodeIfPresent(Link.self, forKey: .link)
         }
 
         public struct Video: Equatable, Sendable, Decodable {
@@ -138,17 +147,21 @@ public enum WireProtocol {
             public var kbps: Int
             /// What held it down when it last fell: `connection`, `client`, or empty.
             public var limitedBy: String
+            /// The send-bandwidth estimate now, kbit/s, video and audio together (0: unknown, an
+            /// older server): the overlay's "Estimate now".
+            public var estimateKbps: Int
 
             public init(codec: String = "", encoder: String = "", hardware: Bool = false, fallbacks: [Fallback] = [],
-                        width: Int = 0, height: Int = 0, fps: Double = 0, kbps: Int = 0, limitedBy: String = "") {
+                        width: Int = 0, height: Int = 0, fps: Double = 0, kbps: Int = 0, limitedBy: String = "",
+                        estimateKbps: Int = 0) {
                 (self.codec, self.encoder, self.hardware, self.fallbacks) = (codec, encoder, hardware, fallbacks)
                 (self.width, self.height, self.fps) = (width, height, fps)
-                (self.kbps, self.limitedBy) = (kbps, limitedBy)
+                (self.kbps, self.limitedBy, self.estimateKbps) = (kbps, limitedBy, estimateKbps)
             }
 
             enum CodingKeys: String, CodingKey {
                 case codec, encoder, hardware, fallbacks, width, height, fps, kbps
-                case limitedBy = "limited_by"
+                case limitedBy = "limited_by", estimateKbps = "estimate_kbps"
             }
 
             public init(from decoder: Decoder) throws {
@@ -162,6 +175,7 @@ public enum WireProtocol {
                 fps = try c.decodeIfPresent(Double.self, forKey: .fps) ?? 0
                 kbps = try c.decodeIfPresent(Int.self, forKey: .kbps) ?? 0
                 limitedBy = try c.decodeIfPresent(String.self, forKey: .limitedBy) ?? ""
+                estimateKbps = try c.decodeIfPresent(Int.self, forKey: .estimateKbps) ?? 0
             }
         }
 
@@ -212,6 +226,67 @@ public enum WireProtocol {
         guard bytes.count >= 2, bytes.count <= maxPipelineLength, bytes[0] == typePipeline, bytes[1] == inputVersion
         else { return nil }
         return try? JSONDecoder().decode(Pipeline.self, from: Data(bytes[2...]))
+    }
+
+    /// The check of the player's connection before a game starts (`0x83`: type, version, then a
+    /// JSON object; `Link` in SovEmu.Protocol, #243). While `state` is `probing` the worker sends
+    /// no video and the loading bar shows "Checking your connection" from `elapsedMs` of
+    /// `budgetMs`; once `done` the stream starts at `startKbps`. Every key may be missing (an
+    /// empty or zero default) and unknown keys are ignored.
+    public struct Link: Equatable, Sendable, Decodable {
+        /// `probing`, then `done`; empty for a state this app does not know.
+        public var state: String
+        /// How long the check has run, and may run, milliseconds.
+        public var elapsedMs: Int
+        public var budgetMs: Int
+        /// `lan`, `direct`, `relay`, `relay-udp`, `relay-tcp` or `relay-tls`; empty while unknown.
+        public var path: String
+        /// The send-bandwidth estimate, kbit/s, video and audio together.
+        public var estimateKbps: Int
+        /// The video rate the stream starts at, kbit/s, once done.
+        public var startKbps: Int
+        /// The round trip the worker measures, milliseconds.
+        public var rttMs: Double?
+        /// `ceiling`, `steady`, `trouble`, `budget`, `unavailable` or `off`; empty while probing.
+        public var stoppedBy: String
+
+        public static let probing = "probing"
+        public static let done = "done"
+
+        public init(state: String = "", elapsedMs: Int = 0, budgetMs: Int = 0, path: String = "", estimateKbps: Int = 0,
+                    startKbps: Int = 0, rttMs: Double? = nil, stoppedBy: String = "") {
+            (self.state, self.elapsedMs, self.budgetMs, self.path) = (state, elapsedMs, budgetMs, path)
+            (self.estimateKbps, self.startKbps, self.rttMs, self.stoppedBy) = (estimateKbps, startKbps, rttMs, stoppedBy)
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case state, path
+            case elapsedMs = "elapsed_ms", budgetMs = "budget_ms", estimateKbps = "estimate_kbps"
+            case startKbps = "start_kbps", rttMs = "rtt_ms", stoppedBy = "stopped_by"
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            let state = try c.decodeIfPresent(String.self, forKey: .state) ?? ""
+            self.state = state == Self.probing || state == Self.done ? state : ""
+            elapsedMs = try c.decodeIfPresent(Int.self, forKey: .elapsedMs) ?? 0
+            budgetMs = try c.decodeIfPresent(Int.self, forKey: .budgetMs) ?? 0
+            path = try c.decodeIfPresent(String.self, forKey: .path) ?? ""
+            estimateKbps = try c.decodeIfPresent(Int.self, forKey: .estimateKbps) ?? 0
+            startKbps = try c.decodeIfPresent(Int.self, forKey: .startKbps) ?? 0
+            rttMs = try c.decodeIfPresent(Double.self, forKey: .rttMs)
+            stoppedBy = try c.decodeIfPresent(String.self, forKey: .stoppedBy) ?? ""
+        }
+    }
+
+    /// Decodes a link message, or returns nil for anything else (another type or version, too
+    /// long, or a body that is not a JSON object of the expected shape).
+    public static func decodeLink(_ data: Data) -> Link? {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 3, bytes.count <= maxLinkLength, bytes[0] == typeLink, bytes[1] == inputVersion
+        else { return nil }
+        // A body that does not decode is not a link message: nil is the answer, not an error.
+        return try? JSONDecoder().decode(Link.self, from: Data(bytes[2...]))
     }
 }
 
