@@ -172,6 +172,10 @@ struct PlayerView: View {
             if menuOpen { menu }
         }
         .playerChrome()
+        #if os(tvOS)
+        // The remote's Play/Pause, also where GameController does not list the remote.
+        .onPlayPauseCommand { if !menuOpen { menuOpen = true } }
+        #endif
         .persistentSystemOverlays(.hidden)
         .task { await begin() }
         .task(id: session?.id) { await pollProgress() }
