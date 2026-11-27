@@ -54,11 +54,33 @@ public struct KeychainTokenStore: RefreshTokenStore {
         self.account = server.absoluteString
     }
 
+    private var item: KeychainItem { KeychainItem(service: service, account: account) }
+
+    public func load() -> String? { item.load() }
+    public func save(_ token: String) { item.save(token) }
+
+    public func clear() {
+        item.delete()
+        UserDefaults.standard.removeObject(forKey: clientKey)
+    }
+
+    /// Which client the token is for is no secret: kept beside it in the defaults.
+    private var clientKey: String { "tokenClient:\(account)" }
+    public func loadClientId() -> String? { UserDefaults.standard.string(forKey: clientKey) }
+    public func saveClientId(_ id: String?) { UserDefaults.standard.set(id, forKey: clientKey) }
+}
+
+/// One generic-password item, this device only (`AfterFirstUnlockThisDeviceOnly`): the refresh
+/// token of `KeychainTokenStore`, and each account's of `KeychainAccountTokenStore`.
+struct KeychainItem {
+    let service: String
+    let account: String
+
     private var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
     }
 
-    public func load() -> String? {
+    func load() -> String? {
         var query = self.query
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -67,7 +89,7 @@ public struct KeychainTokenStore: RefreshTokenStore {
         return String(data: data, encoding: .utf8)
     }
 
-    public func save(_ token: String) {
+    func save(_ token: String) {
         let data = Data(token.utf8)
         let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
@@ -78,15 +100,7 @@ public struct KeychainTokenStore: RefreshTokenStore {
         }
     }
 
-    public func clear() {
-        SecItemDelete(query as CFDictionary)
-        UserDefaults.standard.removeObject(forKey: clientKey)
-    }
-
-    /// Which client the token is for is no secret: kept beside it in the defaults.
-    private var clientKey: String { "tokenClient:\(account)" }
-    public func loadClientId() -> String? { UserDefaults.standard.string(forKey: clientKey) }
-    public func saveClientId(_ id: String?) { UserDefaults.standard.set(id, forKey: clientKey) }
+    func delete() { SecItemDelete(query as CFDictionary) }
 }
 #endif
 
@@ -174,6 +188,8 @@ public actor TokenClient {
     private let session: URLSession
     private let now: @Sendable () -> Date
     private let onSignedOut: (@Sendable () -> Void)?
+    /// The person's proxy headers, on every request to `baseURL`'s host and port.
+    private let customHeaders: CustomHeaderInterceptor
 
     private var access: (token: String, expires: Date)?
     private var refreshing: Task<String, Error>?
@@ -181,13 +197,18 @@ public actor TokenClient {
     /// not store its (now stale) answer.
     private var generation = 0
 
-    /// - Parameter onSignedOut: called when the server refuses the refresh token
-    ///   (`invalid_grant`): the tokens are gone and the app should show the sign-in screen.
+    /// - Parameters:
+    ///   - onSignedOut: called when the server refuses the refresh token (`invalid_grant`): the
+    ///     tokens are gone and the app should show the sign-in screen.
+    ///   - customHeaders: the person's proxy headers (`CustomHeaderRules`), read on every request
+    ///     and sent only to `baseURL`'s host and port.
     public init(
         baseURL: URL, endpoints: SignInEndpoints?, store: any RefreshTokenStore,
-        session: URLSession = SovEmuAPI.makeSession(), now: @escaping @Sendable () -> Date = { Date() }, onSignedOut: (@Sendable () -> Void)? = nil
+        session: URLSession = SovEmuAPI.makeSession(), now: @escaping @Sendable () -> Date = { Date() }, onSignedOut: (@Sendable () -> Void)? = nil,
+        customHeaders: @escaping @Sendable () -> [CustomHeader] = { [] }
     ) {
         self.baseURL = baseURL
+        self.customHeaders = CustomHeaderInterceptor(headers: customHeaders, server: { baseURL.absoluteString })
         self.endpoints = endpoints
         self.store = store
         self.session = session
@@ -259,7 +280,7 @@ public actor TokenClient {
         guard let url = endpoints.deviceAuthorization else {
             throw AuthError(status: 0, code: "unsupported_grant_type", message: "This server does not sign in with a code.")
         }
-        let (data, response) = try await session.data(for: Self.formRequest(url, [("client_id", endpoints.clientId), ("scope", Self.scope)]))
+        let (data, response) = try await send(Self.formRequest(url, [("client_id", endpoints.clientId), ("scope", Self.scope)]))
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         struct Answer: Decodable {
             let device_code: String, user_code: String, verification_uri: String
@@ -287,7 +308,7 @@ public actor TokenClient {
         ])
         let data: Data, status: Int
         do {
-            let (body, response) = try await session.data(for: request)
+            let (body, response) = try await send(request)
             (data, status) = (body, (response as? HTTPURLResponse)?.statusCode ?? 0)
         } catch let error as URLError where error.code == .cancelled {
             throw CancellationError()
@@ -380,7 +401,7 @@ public actor TokenClient {
         guard let token, let endpoints, let revocation = endpoints.revocation else { return }
         var request = Self.formRequest(revocation, [("token", token), ("client_id", client ?? endpoints.clientId)])
         request.timeoutInterval = 10
-        _ = try? await session.data(for: request)
+        _ = try? await send(request)
     }
 
     private func forget() {
@@ -398,8 +419,13 @@ public actor TokenClient {
 
     private func requestToken(_ url: URL, _ fields: [(String, String)]) async throws -> TokenResponse {
         let request = Self.formRequest(url, fields)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await send(request)
         return try Self.readToken(data, status: (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
+
+    /// Every request goes out here, with the proxy headers when it is to the server.
+    private func send(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        try await session.data(for: customHeaders.apply(to: request))
     }
 
     static func readToken(_ data: Data, status: Int) throws -> TokenResponse {
