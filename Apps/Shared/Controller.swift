@@ -1,6 +1,14 @@
 import GameController
 import SovEmuKit
 
+/// What the controllers and the remote did, on the console of a debug build (`devicectl device
+/// process launch --console`): for finding which input did what on a device. Nothing in release.
+func inputTrace(_ line: @autoclosure () -> String) {
+    #if DEBUG
+    print(String(format: "[input %.3f] ", ProcessInfo.processInfo.systemUptime) + line())
+    #endif
+}
+
 /// Every player's RetroPad state from game controllers, a hardware keyboard and the touch
 /// controller, as `docs/CONTROLLERS.md` (in SovEmu) describes.
 ///
@@ -48,6 +56,18 @@ final class Controller {
     private var store = Mappings(system: "")
     private var identities: [ObjectIdentifier: ControllerIdentity] = [:]
     private var observers: [NSObjectProtocol] = []
+    /// When a controller last had anything held (system uptime, seconds), under `lock`: `read()`
+    /// sets it every few milliseconds while one plays.
+    private var padHeldAt: TimeInterval = -.infinity
+    /// Whether `read()` last saw the menu asked for (on the input queue only): for the trace.
+    private var menuWasAsked = false
+
+    /// Every controller tvOS reports, with its profiles: for the trace.
+    static func describeControllers() -> String {
+        GCController.controllers().map { c in
+            "\(c.vendorName ?? "?") [\(c.productCategory)] ext=\(c.extendedGamepad != nil) micro=\(c.microGamepad != nil)"
+        }.joined(separator: "; ")
+    }
 
     init() {
         // Controllers already connected join in GameController's order.
@@ -194,7 +214,62 @@ final class Controller {
         if let keyboard = GCKeyboard.coalesced?.keyboardInput {
             out[.keyboard] = Self.pressedKeys(keyboard)
         }
+        for controller in GCController.controllers() where controller.extendedGamepad == nil {
+            guard let remote = controller.microGamepad else { continue }
+            out[.pad(ObjectIdentifier(controller))] = Self.remoteInputs(remote)
+        }
         return out
+    }
+
+    /// While a game plays, a controller's Home button opens SovEmu's menu (as Select+Start does)
+    /// instead of the system's: Apple TV's Control Center, or an iPad's Home Screen. The system
+    /// keeps it everywhere else, and keeps a long press (Apple TV's own rule).
+    static func claimHome(_ claim: Bool) {
+        for controller in GCController.controllers() {
+            controller.extendedGamepad?.buttonHome?.preferredSystemGestureState = claim ? .disabled : .enabled
+        }
+    }
+
+    /// Whether a controller (not the remote) has had anything held in the last `within`
+    /// seconds: a command tvOS raised then came from it (its B is Back, its X Play/Pause), and
+    /// the game or the polled menu has it already. Asked a moment after the command, for tvOS
+    /// can raise it before GameController reports the press, and a tap may be over by then.
+    func padActive(within: TimeInterval = 0.3) -> Bool {
+        let heldNow = GCController.controllers().contains { controller in
+            guard let pad = controller.extendedGamepad else { return false }
+            return !Self.pressedInputs(pad).isEmpty || !Self.stickDirections(pad).isEmpty
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        let ago = ProcessInfo.processInfo.systemUptime - padHeldAt
+        inputTrace("padActive: held now=\(heldNow), last held \(String(format: "%.3f", ago)) s ago")
+        return heldNow || ago < within
+    }
+
+    // MARK: The Siri Remote
+
+    /// A Siri Remote (an Apple TV's, a micro gamepad) never plays: it moves through the menus as
+    /// a pad's D-pad and face buttons do. Its click pad's directions are the D-pad, a click
+    /// confirms (`south`), and Back goes back (`east`).
+    private static func remoteInputs(_ remote: GCMicroGamepad) -> Set<String> {
+        remote.reportsAbsoluteDpadValues = false
+        var out = Set<String>()
+        let x = remote.dpad.xAxis.value, y = remote.dpad.yAxis.value
+        if x < -0.5 { out.insert("left") }
+        if x > 0.5 { out.insert("right") }
+        if y > 0.5 { out.insert("up") }
+        if y < -0.5 { out.insert("down") }
+        if remote.buttonA.isPressed { out.insert("south") }
+        if remote.buttonMenu.isPressed { out.insert("east") }
+        return out
+    }
+
+    /// The remote's Back or Play/Pause pressed during play: the in-game menu, as a pad's Home.
+    private static func remoteMenuPressed(_ controllers: [GCController]) -> Bool {
+        controllers.contains { controller in
+            guard controller.extendedGamepad == nil, let remote = controller.microGamepad else { return false }
+            return remote.buttonMenu.isPressed || remote.buttonX.isPressed
+        }
     }
 
     // MARK: Play
@@ -235,6 +310,12 @@ final class Controller {
         }
         lock.unlock()
 
+        let padHeld = pads.contains { !Self.pressedInputs($0.0).isEmpty || !Self.stickDirections($0.0).isEmpty }
+        if padHeld {
+            lock.lock()
+            padHeldAt = ProcessInfo.processInfo.systemUptime
+            lock.unlock()
+        }
         for (pad, port, mapping) in pads {
             let hotkeys = HotkeyReading.read(mapping.state(Self.pressedInputs(pad)))
             fastForward = fastForward || hotkeys.fastForward
@@ -284,7 +365,13 @@ final class Controller {
         }
         fastForward = fastForward || touchHotkeys.fastForward
         rewind = rewind || touchHotkeys.rewind
-        menu = menu || touchHotkeys.menu
+        let remoteMenu = Self.remoteMenuPressed(controllers)
+        if (menu || touchHotkeys.menu || remoteMenu) && !menuWasAsked {
+            let home = pads.contains { $0.0.buttonHome?.isPressed == true }
+            inputTrace("read: menu asked (home=\(home) remote=\(remoteMenu) touch/keys=\(touchHotkeys.menu)) pads=\(pads.map { Self.pressedInputs($0.0).sorted() })")
+        }
+        menu = menu || touchHotkeys.menu || remoteMenu
+        menuWasAsked = menu
         ports[0] |= touchHotkeys.state
 
         return Reading(

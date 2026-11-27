@@ -73,8 +73,20 @@ public func describeStart(_ s: StartStatus) -> LaunchView {
 }
 
 /// How to leave a start that is slow, stuck or failed, under the loading bar: as terse as the
-/// web's `Menu: Esc / Select+Start`, with the ☰ button.
+/// web's `Menu: Esc / Select+Start`, with the ☰ button; on an Apple TV the remote's Back (or
+/// Play/Pause) opens it, as Android TV's `Menu: Back / Select+Start` says.
+#if os(tvOS)
+public let loadingHint = "Menu: Back / Select+Start"
+#else
 public let loadingHint = "Menu: ☰ / Select+Start"
+#endif
+
+/// What opens the menu, in the wait for a first picture: the ☰ button, or a TV remote's Back.
+#if os(tvOS)
+private let menuKey = "Back"
+#else
+private let menuKey = "☰"
+#endif
 
 /// After this long without a picture the wait says how to get out of it.
 public let noPictureHintMs: Int64 = 20_000
@@ -101,12 +113,12 @@ public func describeLink(_ link: WireProtocol.Link) -> LaunchView {
 /// The last stretch of a start, which the server cannot see: the session is ready (and the
 /// connection checked), and the game has yet to draw its first picture (a console's BIOS boots
 /// for seconds; a save is loaded once the game is up). The detail counts the wait. (The ☰
-/// button, where the web says Escape and Android Back.)
+/// button, where the web says Escape and Android Back; Back on an Apple TV too.)
 public func describeFirstPicture(waitedMs: Int64) -> LaunchView {
     let seconds = waitedMs / 1000
     var parts: [String] = []
     if seconds >= 3 { parts.append("\(seconds) s") }
-    if waitedMs >= noPictureHintMs { parts.append("still no picture: ☰ opens the menu") }
+    if waitedMs >= noPictureHintMs { parts.append("still no picture: \(menuKey) opens the menu") }
     return LaunchView(label: "Starting the game", detail: parts.joined(separator: " · "), fraction: network.to)
 }
 

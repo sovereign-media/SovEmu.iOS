@@ -2,13 +2,18 @@
 # and gitignored: run `xcodegen generate` after a pull that changes it, and change the project
 # here, never in Xcode's project editor.
 #
-#   SovEmu   iPhone + iPad   SwiftUI over SovEmuKit (protocol, models, API) and WebRTC
+#   SovEmu     iPhone + iPad   SwiftUI over SovEmuKit (protocol, models, API) and WebRTC
+#   SovEmuTV   Apple TV        the same, drawn after SovEmu.Android's TV app
+#
+# Apps/Shared is compiled into both: the stream, the controller, the library store, artwork,
+# music and the theme. Each app's own screens are in Apps/Mobile and Apps/TV.
 name: SovEmu
 
 options:
   bundleIdPrefix: media.sovereign
   deploymentTarget:
     iOS: "18.0"
+    tvOS: "18.0"
   createIntermediateGroups: true
   developmentLanguage: en
 
@@ -31,6 +36,7 @@ targets:
     platform: iOS
     sources:
       - path: Apps/Mobile
+      - path: Apps/Shared
     dependencies:
       - package: SovEmuKit
       - package: WebRTC
@@ -60,3 +66,40 @@ targets:
         GCSupportsControllerUserInteraction: true
         GCSupportedGameControllers:
           - ProfileName: ExtendedGamepad
+
+  SovEmuTV:
+    type: application
+    platform: tvOS
+    sources:
+      - path: Apps/TV
+      - path: Apps/Shared
+    dependencies:
+      - package: SovEmuKit
+      - package: WebRTC
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: media.sovereign.sovemu.tv
+        TARGETED_DEVICE_FAMILY: "3"
+        # LiveKit's tvOS simulator slice is arm64 only (Apple silicon Macs).
+        "EXCLUDED_ARCHS[sdk=appletvsimulator*]": x86_64
+        # As the iPhone app: Swift 5 mode for WebRTC's Objective-C delegates only.
+        SWIFT_VERSION: "5.0"
+        # The app icon and Top Shelf image: Apps/TV/Assets.xcassets, written by SovEmu's
+        # brand/generate.mjs.
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "SovEmu streams games from your SovEmu server on the local network."
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.games
+    info:
+      path: Apps/TV/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # A controller moves focus in the menus as the Siri Remote does; while a game plays, the
+        # player takes its events for the game alone (GCEventViewController).
+        GCSupportsControllerUserInteraction: true
+        GCSupportedGameControllers:
+          - ProfileName: ExtendedGamepad
+          - ProfileName: MicroGamepad
+        UIRequiredDeviceCapabilities: [arm64]

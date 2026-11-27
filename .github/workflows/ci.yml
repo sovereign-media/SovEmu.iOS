@@ -39,3 +39,9 @@ jobs:
           xcodebuild -project SovEmu.xcodeproj -scheme SovEmu
           -destination 'generic/platform=iOS Simulator'
           CODE_SIGNING_ALLOWED=NO build
+
+      - name: Build the Apple TV app for the simulator
+        run: >
+          xcodebuild -project SovEmu.xcodeproj -scheme SovEmuTV
+          -destination 'generic/platform=tvOS Simulator'
+          CODE_SIGNING_ALLOWED=NO build

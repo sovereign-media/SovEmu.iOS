@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "SovEmuKit",
-    platforms: [.iOS(.v18), .macOS(.v15)],
+    platforms: [.iOS(.v18), .tvOS(.v18), .macOS(.v15)],
     products: [.library(name: "SovEmuKit", targets: ["SovEmuKit"])],
     dependencies: [
         // Exact, never a range: `Sources/SovEmuKit/Generated` is written by the CLI of this same

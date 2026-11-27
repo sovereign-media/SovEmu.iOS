@@ -8,7 +8,14 @@ import WebRTC
 final class Stream: NSObject {
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
-        return RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory())
+        // The audio engine module records only once a local audio track starts, and SovEmu sends
+        // none. The platform default's voice-processing unit opens the microphone just to play,
+        // which needs a microphone permission (a TV kills the app without one) for audio that
+        // only ever comes in.
+        return RTCPeerConnectionFactory(
+            audioDeviceModuleType: .audioEngine, bypassVoiceProcessing: true,
+            encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory(),
+            audioProcessingModule: nil)
     }()
 
     private let api: SovEmuAPI
@@ -209,12 +216,13 @@ final class Stream: NSObject {
         if reading.menu && !menuHeld { DispatchQueue.main.async { self.onMenu?() } }
         menuHeld = reading.menu
         guard channel.readyState == .open else { return }
-        // Every player from 1 to the highest in use; a menu shows the game nothing pressed.
+        // Every player from 1 to the highest in use; a menu shows the game nothing pressed, and
+        // pauses it (as SovEmu.Android's and the web's): no frames run until it closes.
         portCount = max(portCount, reading.ports.count)
         let pads = reading.ports + [UInt16](repeating: 0, count: portCount - reading.ports.count)
         let sticks = reading.analog + [WireProtocol.Analog](repeating: .centred, count: portCount - reading.analog.count)
         let buttons = suspended ? pads.map { _ in 0 } : pads
-        let hotkeys: UInt8 = suspended ? 0 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
+        let hotkeys: UInt8 = suspended ? 4 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
         let now = Date()
         // Sticks: on change, and as a heartbeat while off-centre.
         let analog = suspended ? sticks.map { _ in .centred } : sticks
@@ -229,7 +237,7 @@ final class Stream: NSObject {
         seq &+= 1
         send(WireProtocol.encodeInput(seq: seq, clientTimeMs: now32(), ports: buttons))
         if hotkeys != sentHotkeys || hotkeys != 0 {
-            send(WireProtocol.encodeHotkeys(fastForward: hotkeys & 1 != 0, rewind: hotkeys & 2 != 0))
+            send(WireProtocol.encodeHotkeys(fastForward: hotkeys & 1 != 0, rewind: hotkeys & 2 != 0, pause: hotkeys & 4 != 0))
         }
         sent = buttons
         sentHotkeys = hotkeys

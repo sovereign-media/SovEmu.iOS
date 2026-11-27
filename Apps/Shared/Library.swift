@@ -246,7 +246,8 @@ final class AppSettings {
     var scanlines: Bool {
         didSet { defaults.set(scanlines, forKey: "scanlines") }
     }
-    /// Minutes without input before the screensaver (0: never). Five on an iPad, as on Android;
+    /// Minutes without input before the screensaver (0: never). Five on an iPad and an Apple TV, as
+    /// on Android;
     /// off on an iPhone, where keeping the screen awake for it costs the battery.
     var screensaverMinutes: Int {
         didSet { defaults.set(screensaverMinutes, forKey: "screensaver") }
@@ -261,6 +262,6 @@ final class AppSettings {
         music = defaults.object(forKey: "music") as? Bool ?? true
         scanlines = defaults.object(forKey: "scanlines") as? Bool ?? true
         screensaverMinutes = defaults.object(forKey: "screensaver") as? Int
-            ?? (UIDevice.current.userInterfaceIdiom == .pad ? 5 : 0)
+            ?? (UIDevice.current.userInterfaceIdiom == .phone ? 0 : 5)
     }
 }
