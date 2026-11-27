@@ -1234,6 +1234,28 @@ type FavouriteGame {
 	users: Int!
 }
 
+"""
+A port the router was asked to forward.
+"""
+type ForwardedPort {
+	"""
+	`udp` or `tcp`.
+	"""
+	transport: String!
+	"""
+	The port on this server.
+	"""
+	internal: Int!
+	"""
+	The port the router forwards from, once it does.
+	"""
+	external: Int
+	"""
+	Why it doesn't, when the router refused.
+	"""
+	error: String
+}
+
 type Game {
 	id: Int!
 	"""
@@ -2311,6 +2333,10 @@ type NetworkReport {
 	"""
 	iceServers: [IceServerSummary!]!
 	"""
+	What the home router was asked to forward, and what it does (UPnP or NAT-PMP).
+	"""
+	portMapping: PortMappingReport!
+	"""
 	The settings this page is about, as the Configuration page shows them.
 	"""
 	settings: [ConfigSetting!]!
@@ -2507,6 +2533,64 @@ type PlayerPlays {
 	sessions: Int!
 	seconds: Float!
 	games: Int!
+}
+
+"""
+What the home router was asked to forward, and what it does.
+"""
+type PortMappingReport {
+	state: PortMappingState!
+	"""
+	`UPnP` or `NAT-PMP`.
+	"""
+	protocol: String
+	"""
+	The router's address on the LAN.
+	"""
+	router: String
+	"""
+	This server's address as the router sees it: where it forwards to.
+	"""
+	localAddress: String
+	"""
+	The router's own address on the internet, as it reports it.
+	"""
+	externalAddress: String
+	"""
+	The router's own address is a private one: another router, or the internet provider's
+	carrier-grade NAT, is in front of it, so what it forwards can't be reached from the
+	internet.
+	"""
+	externalAddressPrivate: Boolean!
+	ports: [ForwardedPort!]!
+}
+
+"""
+Where asking the home router to forward ports is.
+"""
+enum PortMappingState {
+	"""
+	Not asked: `SovEmu__Network__PortMapping` is off.
+	"""
+	OFF
+	"""
+	Looking for a router.
+	"""
+	SEARCHING
+	"""
+	No router answered UPnP or NAT-PMP (it has them turned off, or the server is in a
+	container on a bridge network, where the search can't reach it). Searched again every ten
+	minutes.
+	"""
+	NO_ROUTER
+	"""
+	A router answered: `ports` says what it forwards.
+	"""
+	ACTIVE
+	"""
+	The server is shutting down, and the forwards were removed.
+	"""
+	STOPPED
 }
 
 type Query {
