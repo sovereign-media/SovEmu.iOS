@@ -23,9 +23,12 @@ below are from the parent repository's root.
 - **`Apps/Mobile` only draws and does I/O**: SwiftUI views, GameController, WebRTC, AVFoundation.
   It builds in Swift 5 mode only because it wraps WebRTC's Objective-C delegates. Logic that a
   test could check moves down into SovEmuKit.
-- **WebRTC is a binary package**, `Packages/WebRTC`, its xcframework fetched by
-  `scripts/fetch-webrtc.sh` (pinned by SHA-256, gitignored). To move it, change `VERSION`,
-  `MILESTONE` and `SHA256` together; never commit the framework.
+- **WebRTC is a binary package**, `Packages/WebRTC`: LiveKit's build of libwebrtc (it has tvOS
+  slices), fetched by `scripts/fetch-webrtc.sh` (pinned by SHA-256, gitignored). LiveKit prefixes
+  every type with `LK`; the package's `WebRTC` module re-exports them under WebRTC's own names
+  (`Names.swift`), so code writes `RTCPeerConnection`. A type the apps start to use gets its
+  alias there. To move the build, change `VERSION` and `SHA256` together; never commit the
+  framework.
 
 ## Shared with the other clients
 
