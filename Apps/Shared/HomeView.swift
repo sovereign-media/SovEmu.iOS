@@ -230,9 +230,9 @@ struct GameCard: View {
     var body: some View {
         let system = library.system(game.system)
         if let onOpen {
-            Button(action: onOpen) { card(system) }.buttonStyle(.plain)
+            Button(action: onOpen) { card(system) }.cardButtonStyle()
         } else {
-            NavigationLink(value: system.map { Route.system($0, open: game.id) }) { card(system) }.buttonStyle(.plain)
+            NavigationLink(value: system.map { Route.system($0, open: game.id) }) { card(system) }.cardButtonStyle()
         }
     }
 
@@ -296,6 +296,6 @@ private struct SystemCard: View {
             }
             .frame(width: 224)
         }
-        .buttonStyle(.plain)
+        .cardButtonStyle()
     }
 }

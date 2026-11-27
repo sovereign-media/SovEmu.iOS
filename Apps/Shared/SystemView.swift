@@ -257,7 +257,7 @@ private struct CoverCard: View {
                 .padding(.horizontal, 2)
             }
         }
-        .buttonStyle(.plain)
+        .cardButtonStyle()
     }
 }
 
@@ -413,7 +413,7 @@ private struct SaveThumb: View {
             }
             .frame(width: 112)
         }
-        .buttonStyle(.plain)
+        .cardButtonStyle()
     }
 }
 

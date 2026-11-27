@@ -75,10 +75,13 @@ extension View {
         #endif
     }
 
-    /// A card that lifts when it has the focus on a TV; a plain button elsewhere.
+    /// A game's or a system's card. On a TV the focused card grows, with a shadow and an accent
+    /// ring, and its caption keeps its colours (tvOS's `.plain` and `.card` styles put a white
+    /// platter behind the whole label, and `.borderless` lifts only images, which a card
+    /// without artwork has none of); a plain button elsewhere.
     @ViewBuilder func cardButtonStyle() -> some View {
         #if os(tvOS)
-        buttonStyle(.card)
+        buttonStyle(TVCardStyle())
         #else
         buttonStyle(.plain)
         #endif
@@ -86,12 +89,39 @@ extension View {
 }
 
 #if os(tvOS)
+private struct TVCardStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        TVCard(label: configuration.label, pressed: configuration.isPressed)
+    }
+}
+
+private struct TVCard<Label: View>: View {
+    let label: Label
+    let pressed: Bool
+    @Environment(\.isFocused) private var focused
+
+    var body: some View {
+        label
+            .padding(6)
+            .overlay {
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Sov.accent, lineWidth: focused ? 4 : 0)
+            }
+            .scaleEffect(pressed ? 1.02 : focused ? 1.08 : 1)
+            .shadow(color: .black.opacity(focused ? 0.6 : 0), radius: 20, y: 12)
+            .animation(.easeOut(duration: 0.15), value: focused)
+            .animation(.easeOut(duration: 0.1), value: pressed)
+    }
+}
+
 /// The TV's side panel. Nothing behind it can take the focus while it is open (the screen behind
 /// is disabled under a scrim), and Menu closes it, so the focus comes back to the card that
 /// opened it.
 private struct TVSidePanel<Panel: View>: ViewModifier {
     @Binding var isPresented: Bool
     let panel: () -> Panel
+    @Namespace private var scope
+    @Environment(\.resetFocus) private var resetFocus
 
     func body(content: Content) -> some View {
         ZStack(alignment: .trailing) {
@@ -109,6 +139,12 @@ private struct TVSidePanel<Panel: View>: ViewModifier {
                     .onExitCommand { isPresented = false }
                     .transition(.move(edge: .trailing))
             }
+        }
+        .focusScope(scope)
+        // A disabled view keeps the focus it had: hand it to the panel once it is there, and back
+        // to the page (the focus engine's choice) when it closes.
+        .onChange(of: isPresented) { _, _ in
+            DispatchQueue.main.async { resetFocus(in: scope) }
         }
         .animation(.easeOut(duration: 0.25), value: isPresented)
     }

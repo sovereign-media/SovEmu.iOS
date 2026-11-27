@@ -63,6 +63,9 @@ final class Stream: NSObject {
     let frameLatency = FrameLatency()
     /// Watches the frames reaching the screen, beside the video view.
     private let tap = FrameTap()
+    /// The video track in the view (main thread only). Kept: an `RTCVideoTrack` removes its
+    /// renderers when it is freed, and the stream's wrapper of it is not kept by anything else.
+    private var videoTrack: RTCVideoTrack?
     private let rttLock = NSLock()
     /// The last input round trips, in ms (send, the worker applies it on a frame, its ack).
     private var rtts: [Int64] = []
@@ -277,16 +280,26 @@ extension Stream: RTCPeerConnectionDelegate {
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didStartReceivingOn transceiver: RTCRtpTransceiver) {
-        if let track = transceiver.receiver.track as? RTCVideoTrack {
-            DispatchQueue.main.async {
-                track.add(self.videoView)
-                track.add(self.tap)
-            }
+        if let track = transceiver.receiver.track as? RTCVideoTrack { attach(track) }
+    }
+
+    /// The stream's video track, typed as one: LiveKit's build hands the receiver's track back as
+    /// a plain `RTCMediaStreamTrack`, which `didStartReceivingOn` cannot cast.
+    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        if let track = stream.videoTracks.first { attach(track) }
+    }
+
+    /// Shows `track` in the video view and counts its frames, once whichever callback finds it.
+    private func attach(_ track: RTCVideoTrack) {
+        DispatchQueue.main.async {
+            guard self.videoTrack == nil else { return }
+            self.videoTrack = track
+            track.add(self.videoView)
+            track.add(self.tap)
         }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
-    func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceConnectionState) {}
