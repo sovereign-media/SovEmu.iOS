@@ -195,6 +195,48 @@ type AppearanceSettings {
 }
 
 """
+A reason downloads failed, and how many did.
+"""
+type ArtworkFailure {
+	kind: ArtworkKind!
+	"""
+	What went wrong, with what the source answered: "refused (HTTP 430): …", "not an MP4
+	video: …", "no answer (…)".
+	"""
+	reason: String!
+	count: Int!
+}
+
+"""
+What a download is.
+"""
+enum ArtworkKind {
+	BOX_ART
+	SCREENSHOT
+	"""
+	The game's logo.
+	"""
+	MARQUEE
+	"""
+	A gameplay video.
+	"""
+	VIDEO
+}
+
+"""
+One kind's downloads in the current (or last) download job.
+"""
+type ArtworkKindProgress {
+	kind: ArtworkKind!
+	"""
+	Queued since the job started (a retry counts again).
+	"""
+	total: Int!
+	downloaded: Int!
+	failed: Int!
+}
+
+"""
 Artwork (box art, screenshots, logos) and videos being downloaded after a lookup.
 """
 type ArtworkStatus {
@@ -207,9 +249,15 @@ type ArtworkStatus {
 	downloaded: Int!
 	failed: Int!
 	"""
-	Of `downloaded`, the gameplay videos.
+	Each kind's share, box art first.
 	"""
-	videos: Int!
+	kinds: [ArtworkKindProgress!]!
+	"""
+	Why downloads failed in this job (or the last), in the order each reason first came
+	(at most 20 reasons). Older failures are in `gamesNeedingAttention(kind:
+	DOWNLOAD_GAVE_UP)`.
+	"""
+	failures: [ArtworkFailure!]!
 }
 
 """
@@ -245,8 +293,8 @@ type AttentionItem {
 	"""
 	path: String!
 	"""
-	Why it has no information, the tags it shares, the parts missing, or why a file was
-	skipped.
+	Why it has no information, the tags it shares, the parts missing, why a file was
+	skipped, or where its video or a download stands and why (a line per download).
 	"""
 	detail: String!
 }
@@ -268,6 +316,17 @@ enum AttentionKind {
 	No box art, beside it or downloaded.
 	"""
 	NO_BOX_ART
+	"""
+	No gameplay video downloaded: none found, not downloaded yet, failing, or given up (the
+	detail says which, and why). Listed only while `SovEmu__Metadata__Videos` is on.
+	"""
+	NO_VIDEO
+	"""
+	A picture or video whose download failed 3 times and is no longer tried: the detail
+	names each, with the reason its last attempt failed. `retryArtworkDownloads` tries
+	them again.
+	"""
+	DOWNLOAD_GAVE_UP
 	"""
 	The same title and tags in two or more files of a system.
 	"""
@@ -1977,7 +2036,7 @@ type MetadataStatus {
 	"""
 	notes: [String!]!
 	"""
-	The box art downloads that follow a lookup, in the background.
+	The artwork and video downloads that follow a lookup, in the background.
 	"""
 	artwork: ArtworkStatus!
 	"""
@@ -2251,6 +2310,13 @@ type Mutation {
 	runs.
 	"""
 	lookUpGame(gameId: Int!): MetadataStatus!
+	"""
+	Admins: tries again the pictures and videos whose downloads gave up
+	(`DOWNLOAD_GAVE_UP`), one system's or all: their attempts start again and the
+	downloads start in the background, unless they are running (the next round takes
+	them). Returns how many downloads were queued again.
+	"""
+	retryArtworkDownloads(system: ID): Int!
 	"""
 	Admins: deletes a backup (`NOT_FOUND` if there is none by that name).
 	"""
