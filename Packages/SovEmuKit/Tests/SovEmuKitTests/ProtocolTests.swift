@@ -14,6 +14,7 @@ struct ProtocolTests {
         #expect([UInt8](WireProtocol.encodeHotkeys(fastForward: true, rewind: true)) == [0x02, 1, 0b11])
         #expect([UInt8](WireProtocol.encodeHotkeys(fastForward: true, rewind: false)) == [0x02, 1, 0b01])
         #expect([UInt8](WireProtocol.encodeHotkeys(fastForward: false, rewind: true)) == [0x02, 1, 0b10])
+        #expect([UInt8](WireProtocol.encodeHotkeys(fastForward: false, rewind: false, pause: true)) == [0x02, 1, 0b100])
     }
 
     @Test func encodesStatsLikeTheRustReference() {

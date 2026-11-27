@@ -119,15 +119,27 @@ struct PlayerView: View {
     @State private var controls: ControlsInfo?
     /// The whole frame, stretched to the console's shape (the box it is in): never cropped.
     @State private var video = SampleBufferVideoView(frame: .zero)
-    #if os(tvOS)
-    /// The player holds tvOS's focus for as long as it is on screen: with nothing focused, Back
-    /// (a controller's B, every few seconds in a game) reaches the cover and ends the game.
-    @FocusState private var holdsFocus: Bool
-    #endif
 
     private static var hasInputDevice: Bool { !GCController.controllers().isEmpty || GCKeyboard.coalesced != nil }
 
     var body: some View {
+        #if os(tvOS)
+        // The controllers and the remote belong to the game, read through GameController only:
+        // left to tvOS, a controller's B is also Back, which now and then closed the game (and
+        // then the app) before the player saw it. The cheat code's text field gives them back.
+        // The player is hosted apart, so it is given the environment it reads.
+        GameControllers(owned: !addingCheat, content: player
+            .environment(model).environment(settings).environment(\.api, model.api)
+            .environment(\.colorScheme, .dark).tint(Sov.accent))
+            .ignoresSafeArea()
+            .onAppear { inputTrace("player: controllers \(Controller.describeControllers())") }
+            .onDisappear(perform: leave)
+        #else
+        player.onDisappear(perform: leave)
+        #endif
+    }
+
+    private var player: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             Decorated(decoration: decoration, aspect: aspect) { VideoView(view: video) }
@@ -193,13 +205,7 @@ struct PlayerView: View {
         }
         .playerChrome()
         #if os(tvOS)
-        .focused($holdsFocus)
-        .onAppear { holdsFocus = true }
-        .onChange(of: holdsFocus) { _, held in
-            // Only the cheat code's text field may take it (its alert gives it back).
-            if !held && !addingCheat { holdsFocus = true }
-        }
-        .onChange(of: addingCheat) { _, adding in if !adding { holdsFocus = true } }
+        .onChange(of: menuOpen) { _, open in inputTrace("menu \(open ? "opened" : "closed")") }
         // The remote, through tvOS's commands (GameController does not see it on an Apple TV):
         // Back or Play/Pause opens the menu; in the menu the click pad moves, a click chooses and
         // Back goes back. A controller raises the same commands, but it plays the game and
@@ -246,7 +252,6 @@ struct PlayerView: View {
             // The touch controls come back once nothing else is left to play with.
             DispatchQueue.main.async { if !Self.hasInputDevice { showTouch = true } }
         }
-        .onDisappear(perform: leave)
         .alert("Add a cheat", isPresented: $addingCheat) {
             TextField("Code (Game Genie, Action Replay, raw)", text: $cheatCode)
                 .textInputAutocapitalization(.characters).autocorrectionDisabled().fontDesign(.monospaced)
@@ -355,6 +360,7 @@ struct PlayerView: View {
     /// An action from the remote: in play, Back opens the menu; in the menu, every action is the
     /// menu's.
     private func remote(_ action: MenuAction) {
+        inputTrace("tvOS command: \(action), menu \(menuOpen ? "open" : "closed")")
         // A controller raises these commands too, sometimes before GameController has its press:
         // decide a moment later, when the press (if it was a controller's) has been read.
         Task { @MainActor in
@@ -364,8 +370,12 @@ struct PlayerView: View {
     }
 
     private func remoteNow(_ action: MenuAction) {
-        guard !controller.padActive() else { return }
+        guard !controller.padActive() else {
+            inputTrace("tvOS command \(action): a controller's, dropped")
+            return
+        }
         if !menuOpen {
+            inputTrace("tvOS command \(action): the remote's\(action == .back ? ", opens the menu" : "")")
             // A controller's B that closed the menu also raises Back: that copy must not reopen it.
             if action == .back, gameMenu?.isEcho(.back, polled: false) != true { menuOpen = true }
             return
@@ -630,6 +640,7 @@ struct PlayerView: View {
                 }
             }
             s.onMenu = {
+                inputTrace("stream: menu asked, menu \(menuOpen ? "open" : "closed")")
                 // The press that just closed the menu (Escape, Home) must not reopen it.
                 if !menuOpen && Date().timeIntervalSince(gameMenu?.closedAt ?? .distantPast) > 0.3 { menuOpen = true }
             }

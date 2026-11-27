@@ -351,7 +351,10 @@ final class GameMenu {
             watchers[key] = watcher
             let before = page
             for input in pressed.sorted() {
-                guard let action = MenuAction.of(input), !isEcho(action, polled: true) else { continue }
+                guard let action = MenuAction.of(input) else { continue }
+                let echo = isEcho(action, polled: true)
+                inputTrace("poll: \(input) -> \(action)\(echo ? " (echo, dropped)" : "")")
+                if echo { continue }
                 perform(action, rows, close: close)
                 // A row may have changed the page or started a capture: read the rest next time.
                 if capture != nil || page != before { return }
@@ -362,7 +365,10 @@ final class GameMenu {
     /// One action from somewhere other than a polled controller: the Apple TV remote, through
     /// tvOS's own move, select and Back commands. Ignored while a remapping waits for an input.
     func act(_ action: MenuAction, main: [MenuItem], close: @escaping () -> Void) {
-        guard capture == nil, !isEcho(action, polled: false) else { return }
+        guard capture == nil else { return }
+        let echo = isEcho(action, polled: false)
+        inputTrace("menu command: \(action)\(echo ? " (echo, dropped)" : "")")
+        if echo { return }
         perform(action, items(main: main, close: close), close: close)
     }
 

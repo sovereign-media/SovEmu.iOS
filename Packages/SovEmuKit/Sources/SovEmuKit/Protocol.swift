@@ -31,8 +31,10 @@ public enum WireProtocol {
         return out
     }
 
-    public static func encodeHotkeys(fastForward: Bool, rewind: Bool) -> Data {
-        Data([typeHotkeys, inputVersion, (fastForward ? 1 : 0) | (rewind ? 2 : 0)])
+    /// Flags: bit 0 fast-forward, bit 1 rewind, bit 2 pause (the in-game menu is open: no
+    /// frames run until it closes).
+    public static func encodeHotkeys(fastForward: Bool, rewind: Bool, pause: Bool = false) -> Data {
+        Data([typeHotkeys, inputVersion, (fastForward ? 1 : 0) | (rewind ? 2 : 0) | (pause ? 4 : 0)])
     }
 
     /// One port's analog controls: sticks −32768...32767 (x right, y down, libretro's

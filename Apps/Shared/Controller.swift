@@ -1,6 +1,14 @@
 import GameController
 import SovEmuKit
 
+/// What the controllers and the remote did, on the console of a debug build (`devicectl device
+/// process launch --console`): for finding which input did what on a device. Nothing in release.
+func inputTrace(_ line: @autoclosure () -> String) {
+    #if DEBUG
+    print(String(format: "[input %.3f] ", ProcessInfo.processInfo.systemUptime) + line())
+    #endif
+}
+
 /// Every player's RetroPad state from game controllers, a hardware keyboard and the touch
 /// controller, as `docs/CONTROLLERS.md` (in SovEmu) describes.
 ///
@@ -51,6 +59,15 @@ final class Controller {
     /// When a controller last had anything held (system uptime, seconds), under `lock`: `read()`
     /// sets it every few milliseconds while one plays.
     private var padHeldAt: TimeInterval = -.infinity
+    /// Whether `read()` last saw the menu asked for (on the input queue only): for the trace.
+    private var menuWasAsked = false
+
+    /// Every controller tvOS reports, with its profiles: for the trace.
+    static func describeControllers() -> String {
+        GCController.controllers().map { c in
+            "\(c.vendorName ?? "?") [\(c.productCategory)] ext=\(c.extendedGamepad != nil) micro=\(c.microGamepad != nil)"
+        }.joined(separator: "; ")
+    }
 
     init() {
         // Controllers already connected join in GameController's order.
@@ -224,7 +241,9 @@ final class Controller {
         }
         lock.lock()
         defer { lock.unlock() }
-        return heldNow || ProcessInfo.processInfo.systemUptime - padHeldAt < within
+        let ago = ProcessInfo.processInfo.systemUptime - padHeldAt
+        inputTrace("padActive: held now=\(heldNow), last held \(String(format: "%.3f", ago)) s ago")
+        return heldNow || ago < within
     }
 
     // MARK: The Siri Remote
@@ -346,7 +365,13 @@ final class Controller {
         }
         fastForward = fastForward || touchHotkeys.fastForward
         rewind = rewind || touchHotkeys.rewind
-        menu = menu || touchHotkeys.menu || Self.remoteMenuPressed(controllers)
+        let remoteMenu = Self.remoteMenuPressed(controllers)
+        if (menu || touchHotkeys.menu || remoteMenu) && !menuWasAsked {
+            let home = pads.contains { $0.0.buttonHome?.isPressed == true }
+            inputTrace("read: menu asked (home=\(home) remote=\(remoteMenu) touch/keys=\(touchHotkeys.menu)) pads=\(pads.map { Self.pressedInputs($0.0).sorted() })")
+        }
+        menu = menu || touchHotkeys.menu || remoteMenu
+        menuWasAsked = menu
         ports[0] |= touchHotkeys.state
 
         return Reading(

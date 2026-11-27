@@ -3,6 +3,9 @@
 // A TV has no navigation bar, no inspector and no touch: a panel slides in from the right over a
 // dimmed screen and takes the focus, as SovEmu.Android's TV side panels do, and Menu closes it.
 import SwiftUI
+#if os(tvOS)
+import GameController
+#endif
 
 /// A size for a phone or tablet, or a TV's (seen from across a room, at 1920 points wide).
 func onTV(_ value: CGFloat, tv: CGFloat) -> CGFloat {
@@ -153,6 +156,34 @@ private struct TVSidePanel<Panel: View>: ViewModifier {
             DispatchQueue.main.async { resetFocus(in: scope) }
         }
         .animation(.easeOut(duration: 0.25), value: isPresented)
+    }
+}
+#endif
+
+#if os(tvOS)
+/// A game's screen on tvOS: GameController's event view controller around it, which, while
+/// `owned`, keeps every controller's and the remote's presses from UIKit (no Back, no focus
+/// moves, no Play/Pause), so they reach the game and its menu through GameController alone.
+struct GameControllers<Content: View>: UIViewControllerRepresentable {
+    let owned: Bool
+    let content: Content
+
+    func makeUIViewController(context: Context) -> GCEventViewController {
+        let events = GCEventViewController()
+        let host = UIHostingController(rootView: content)
+        host.view.backgroundColor = .clear
+        events.addChild(host)
+        host.view.frame = events.view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        events.view.addSubview(host.view)
+        host.didMove(toParent: events)
+        events.controllerUserInteractionEnabled = !owned
+        return events
+    }
+
+    func updateUIViewController(_ events: GCEventViewController, context: Context) {
+        events.controllerUserInteractionEnabled = !owned
+        (events.children.first as? UIHostingController<Content>)?.rootView = content
     }
 }
 #endif
