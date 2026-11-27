@@ -6,20 +6,24 @@ import SovEmuKit
 
 @main
 struct SovEmuTVApp: App {
-    @State private var model: AppModel
+    /// The accounts (several, on several servers), which drive `model` for the shared screens.
+    @State private var session: TVSession
     @State private var library: Library
     @State private var settings = AppSettings()
 
     init() {
-        let model = AppModel()
-        _model = State(initialValue: model)
+        let session = TVSession()
+        let model = session.model
+        _session = State(initialValue: session)
         _library = State(initialValue: Library(api: { [weak model] in model?.api }, signedOut: { [weak model] in model?.signedIn = false }))
     }
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(model)
+                .launchScreens(session)
+                .environment(session)
+                .environment(session.model)
                 .environment(library)
                 .environment(settings)
                 .preferredColorScheme(.dark)
@@ -114,7 +118,7 @@ struct MainView: View {
         case .home:
             NavigationStack(path: $home) { HomeView(path: $home).routes().backToDock(home.isEmpty) { docked = .home } }
         case .search:
-            NavigationStack(path: $search) { SearchView().routes().backToDock(search.isEmpty) { docked = .search } }
+            NavigationStack(path: $search) { TVSearchView().routes().backToDock(search.isEmpty) { docked = .search } }
         case .systems:
             NavigationStack(path: $systems) { SystemsList().routes().backToDock(systems.isEmpty) { docked = .systems } }
         case .account:

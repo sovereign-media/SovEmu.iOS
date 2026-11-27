@@ -28,30 +28,36 @@ struct SearchView: View {
         .background(Sov.surface)
         .navigationTitle("Search")
         .searchField($query, prompt: "Titles, makers, genres")
-        .task(id: query) {
-            // Asks after a pause in typing; a new query cancels the one before it.
-            let q = String(query.trimmingCharacters(in: .whitespaces).prefix(100))
-            guard !q.isEmpty else {
-                results = nil
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled, let api = model.api else { return }
-            do {
-                results = .ready(try await api.search(q))
-            } catch is CancellationError {
-            } catch {
-                results = .failed(error.localizedDescription)
-            }
+        .task(id: query) { results = await Self.search(query, api: model.api) ?? results }
+    }
+
+    /// The results for `query` (asked after a pause in typing; a new query cancels the one before
+    /// it, which answers nil: nothing changes), as both apps' search pages ask.
+    static func search(_ query: String, api: SovEmuAPI?) async -> Load<[Game]>?? {
+        let q = String(query.trimmingCharacters(in: .whitespaces).prefix(100))
+        guard !q.isEmpty else { return .some(nil) }
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled, let api else { return nil }
+        do {
+            return .ready(try await api.search(q))
+        } catch is CancellationError {
+            return nil
+        } catch {
+            return .failed(error.localizedDescription)
         }
     }
 
-    private var isFailure: Bool {
+    private var isFailure: Bool { Self.isFailure(results) }
+
+    private var summary: String? { Self.summary(results) }
+
+    static func isFailure(_ results: Load<[Game]>?) -> Bool {
         if case .failed = results { return true }
         return false
     }
 
-    private var summary: String? {
+    /// The line over the results: how many, or why none.
+    static func summary(_ results: Load<[Game]>?) -> String? {
         switch results {
         case nil, .loading: nil
         case .failed(let message): message
@@ -59,7 +65,7 @@ struct SearchView: View {
             switch games.count {
             case 0: "No games match. Try fewer words."
             case 1: "1 game"
-            case Self.limit: "The first \(Self.limit) games"
+            case limit: "The first \(limit) games"
             default: "\(games.count) games"
             }
         }

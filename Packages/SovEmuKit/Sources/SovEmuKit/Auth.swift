@@ -165,6 +165,8 @@ struct TokenResponse: Decodable {
     let access_token: String
     let expires_in: Double?
     let refresh_token: String?
+    /// Who signed in (`sub`, `preferred_username`): the device's accounts are keyed on it.
+    let id_token: String?
 }
 
 /// The token or password endpoint's answer when it refuses.
@@ -192,6 +194,9 @@ public actor TokenClient {
     private let customHeaders: CustomHeaderInterceptor
 
     private var access: (token: String, expires: Date)?
+    /// The ID token of the last sign-in or refresh that carried one (nil after a sign-out): who
+    /// signed in, for the TV's accounts (`AccountStore.signedIn`). Never logged.
+    public private(set) var idToken: String?
     private var refreshing: Task<String, Error>?
     /// Bumped by every sign-in and sign-out, so a refresh that was in flight across one does
     /// not store its (now stale) answer.
@@ -408,12 +413,14 @@ public actor TokenClient {
         generation += 1
         store.clear()
         access = nil
+        idToken = nil
         refreshing = nil
     }
 
     private func accept(_ tokens: TokenResponse) {
         // Rotation: the new refresh token replaces the old one.
         if let refresh = tokens.refresh_token { store.save(refresh) }
+        if let id = tokens.id_token { idToken = id }
         access = (tokens.access_token, now().addingTimeInterval(tokens.expires_in ?? 3600))
     }
 

@@ -20,6 +20,8 @@ final class AppModel {
         }
     }
     var signedIn = false
+    /// A game is on screen (set by `RootView`): the TV's idle picker never comes over one.
+    var playing = false
     /// How to sign in at `serverURL`: the server's last answer, kept so that refreshing a token
     /// works on a start without the server, and asked again whenever it can be.
     private(set) var bootstrap: BootstrapConfig?
@@ -33,7 +35,28 @@ final class AppModel {
     }
     private static let bootstrapKey = "bootstrap"
 
-    init() {
+    /// Where a client keeps its refresh token: the phone's one sign-in per server
+    /// (`KeychainTokenStore`), or on the TV the active account's (`TVSession`).
+    @ObservationIgnored private let tokenStore: (URL) -> any RefreshTokenStore
+    /// The person's proxy headers (`CustomHeaderRules`), sent to the server only.
+    @ObservationIgnored private let customHeaders: @Sendable () -> [CustomHeader]
+    /// Told when a sign-in ends: `refused` when the server refused the refresh token, else a
+    /// sign-out. The TV's session lands where its accounts say; the phone needs nothing.
+    @ObservationIgnored var onSignedOut: ((_ refused: Bool) -> Void)?
+    /// The device name last given to the signed-in session (`nameDevice`): the phone's in the
+    /// defaults, the TV's per account.
+    @ObservationIgnored private let deviceName: (get: () -> String?, set: (String?) -> Void)
+
+    init(
+        tokenStore: @escaping (URL) -> any RefreshTokenStore = { KeychainTokenStore(server: $0) },
+        customHeaders: @escaping @Sendable () -> [CustomHeader] = { [] },
+        deviceName: (get: () -> String?, set: (String?) -> Void) = (
+            { UserDefaults.standard.string(forKey: AppModel.namedDeviceKey) },
+            { UserDefaults.standard.set($0, forKey: AppModel.namedDeviceKey) })
+    ) {
+        self.tokenStore = tokenStore
+        self.customHeaders = customHeaders
+        self.deviceName = deviceName
         if let data = UserDefaults.standard.data(forKey: Self.bootstrapKey),
            let saved = try? JSONDecoder().decode(SavedBootstrap.self, from: data), saved.server == serverURL {
             bootstrap = saved.config
@@ -53,24 +76,32 @@ final class AppModel {
         return config
     }
 
+    /// A new client for the same address: the TV's active account changed.
+    func remakeClient() {
+        api = makeAPI()
+    }
+
     private func makeAPI() -> SovEmuAPI? {
         guard let url = URL(string: serverURL.trimmingCharacters(in: .whitespaces)), url.host() != nil else { return nil }
         // The server refused the refresh token (expired or revoked): back to the sign-in screen.
         let endpoints = bootstrap?.endpoints(relativeTo: url)
-        let auth = TokenClient(baseURL: url, endpoints: endpoints, store: KeychainTokenStore(server: url), onSignedOut: { [weak self] in
-            Task { @MainActor in self?.signedIn = false }
-        })
-        let api = SovEmuAPI(baseURL: url, auth: auth)
+        let auth = TokenClient(baseURL: url, endpoints: endpoints, store: tokenStore(url), onSignedOut: { [weak self] in
+            Task { @MainActor in
+                self?.signedIn = false
+                self?.onSignedOut?(true)
+            }
+        }, customHeaders: customHeaders)
+        let api = SovEmuAPI(baseURL: url, auth: auth, customHeaders: customHeaders)
         ClientEvents.api = api
         return api
     }
 
     /// The device name last given to this sign-in (`nameDevice`); cleared by a new sign-in.
-    private static let namedDeviceKey = "namedDevice"
+    nonisolated static let namedDeviceKey = "namedDevice"
 
     /// A new sign-in on the server: it has no device name yet.
     func signedInAnew() {
-        UserDefaults.standard.removeObject(forKey: Self.namedDeviceKey)
+        deviceName.set(nil)
         signedIn = true
     }
 
@@ -78,15 +109,16 @@ final class AppModel {
     /// version), for the admin's Devices page. Best effort: unnamed, it only shows as "App".
     func nameDevice() async {
         let name = ClientEvents.deviceName
-        guard let api, UserDefaults.standard.string(forKey: Self.namedDeviceKey) != name else { return }
+        guard let api, deviceName.get() != name else { return }
         if (try? await api.nameDevice(name)) != nil {
-            UserDefaults.standard.set(name, forKey: Self.namedDeviceKey)
+            deviceName.set(name)
         }
     }
 
     func signOut() async {
         await api?.signOut()
         signedIn = false
+        onSignedOut?(false)
     }
 }
 

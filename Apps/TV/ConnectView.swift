@@ -1,146 +1,138 @@
-// Signing in on a TV, as SovEmu.Android's TV app (`Login.kt`) and Sovereign's TVs: the server's
-// address first (https, then http unless *Secure connections only*), then *Sign in with your
-// phone* (a code and its QR code to approve on a signed-in phone or browser) with the password as
-// the fallback, and only the code when the server has the password off. Text is typed with
-// tvOS's own keyboard.
-import SwiftUI
+// The TV's launch screens, as SovEmu.Android's (`feature/ui/Launch.kt`'s `LaunchScreens`, drawn
+// by `feature-tv`'s `TvLaunchPages`): *Who's watching?*, *Choose a server*, the proxy headers
+// and the sign-in form, each over the last; Back goes down the stack. `RootView` shows them
+// while nobody is signed in; *Change user or server* opens them over the app
+// (`launchScreens(_:)`). Where each choice leads is `TVSession`'s.
 import SovEmuKit
+import SwiftUI
 
 struct ConnectView: View {
-    @Environment(AppModel.self) private var model
-    @State private var address = ""
-    @AppStorage("secureOnly") private var secureOnly = true
-    @State private var username = ""
-    @State private var password = ""
-    @State private var error: String?
-    @State private var busy = false
-    /// The server's `bootstrapConfig`, once an address has answered.
-    @State private var connected: BootstrapConfig?
-    /// The password form, asked for instead of the code.
-    @State private var passwordAsked = false
+    @Environment(TVSession.self) private var session
+    /// Opened from the account menu: the account signed in now is marked, and choosing it, or
+    /// Back at the bottom, goes back to the app.
+    var fromAccount = false
+    @State private var stack: [LaunchPage] = []
+    @State private var serverError: String?
+    @State private var serverBusy = false
 
     var body: some View {
         ZStack {
-            Sov.surface.ignoresSafeArea()
-            VStack(alignment: .leading, spacing: 28) {
-                HStack(spacing: 16) {
-                    Image("SovEmuMark").resizable().scaledToFit().frame(height: 72).foregroundStyle(Sov.accent)
-                    Text("SovEmu").font(.system(size: 64, weight: .black))
-                }
-                if let connected {
-                    signIn(connected)
-                } else {
-                    serverForm
-                }
-                if let error { Text(error).foregroundStyle(Sov.red300) }
-            }
-            .padding(60)
-            .frame(width: 1000)
-            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 28))
-        }
-        .onAppear {
-            address = Self.shown(model.serverURL)
-            connected = model.bootstrap
-        }
-    }
-
-    // MARK: The server
-
-    private var serverForm: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text("Sign in to play.").foregroundStyle(.secondary)
-            TextField("Server address", text: $address)
-                .textContentType(.URL)
-                .autocorrectionDisabled()
-            Toggle("Secure connections only", isOn: $secureOnly)
-            Button(busy ? "Connecting…" : "Continue") { Task { await connect() } }
-                .disabled(busy || address.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-    }
-
-    /// The address without its scheme, as it is typed.
-    private static func shown(_ url: String) -> String {
-        guard let range = url.range(of: "://") else { return url }
-        return String(url[range.upperBound...])
-    }
-
-    /// The addresses to try for what was typed: as typed when it has a scheme, else https and,
-    /// unless only secure connections are allowed, http after it.
-    private func candidates() -> [String] {
-        let typed = address.trimmingCharacters(in: .whitespaces)
-        if typed.contains("://") { return [typed] }
-        return secureOnly ? ["https://\(typed)"] : ["https://\(typed)", "http://\(typed)"]
-    }
-
-    private func connect() async {
-        busy = true
-        defer { busy = false }
-        error = nil
-        let previous = model.serverURL
-        var last: Error?
-        for candidate in candidates() {
-            model.serverURL = candidate
-            guard model.api != nil else { continue }
-            do {
-                let config = try await model.refreshBootstrap()
-                if config.signInProblem == nil, try await model.api?.status().setupRequired == true {
-                    error = "Finish first-run setup in a browser at \(candidate) first."
-                    return
-                }
-                connected = config
-                passwordAsked = !config.canPair
-                return
-            } catch {
-                last = error
+            if session.switching || stack.isEmpty {
+                LaunchBackdrop { EmptyView() }
+            } else if let top = stack.last {
+                page(top).id(stack)
             }
         }
-        // An address that never answers puts the previous one back.
-        model.serverURL = previous
-        error = "No SovEmu server answered at \(address)" + (last.map { ": \($0.localizedDescription)" } ?? ".")
+        .background(Sov.surface.ignoresSafeArea())
+        // Before `onAppear`: switching Back on and off makes what is inside afresh, which must
+        // not start the stack again.
+        .modifier(BackPops(active: stack.count > 1 || fromAccount, pop: pop))
+        .onAppear { stack = session.startPages() }
+        .onChange(of: session.landings) { stack = session.startPages() }
     }
 
-    // MARK: Signing in
+    @ViewBuilder private func page(_ page: LaunchPage) -> some View {
+        let model = session.model
+        switch page {
+        case .picker:
+            let current = session.current?.id
+            WhoIsWatchingPage(
+                accounts: session.accountsHere,
+                server: model.serverURL,
+                focusOn: fromAccount ? current : session.accountsHere.max { $0.lastUsedAt < $1.lastUsedAt }?.id,
+                current: fromAccount ? current : nil,
+                onChoose: { session.choose($0) },
+                onAddUser: { stack.append(.signIn(addUser: true)) },
+                onChangeServer: { open(.servers) })
+        case .servers:
+            ChooseServerPage(
+                servers: session.servers, error: serverError, busy: serverBusy,
+                onChoose: { server in act { try await ServerChooser(service: session, session: session).choose(server) } },
+                onRemove: { server in
+                    let servers = session.servers
+                    act { try await ServerChooser(service: session, session: session).remove(server, from: servers) }
+                },
+                onAddServer: { stack.append(.signIn(newServer: true, returnTo: model.serverURL)) })
+        case .headers:
+            CustomHeadersPage(headers: Binding(get: { session.headers }, set: { session.headers = $0 }), onDone: pop)
+        case let .signIn(addUser, username, expired, newServer, _):
+            SignInFormPage(
+                addUser: addUser, username: username, notice: expired ? LaunchText.expired : nil, newServer: newServer,
+                onChangeServer: !newServer && !addUser && !session.accounts.isEmpty ? { open(.servers) } : nil,
+                onCustomHeaders: { stack.append(.headers) })
+        }
+    }
 
-    @ViewBuilder private func signIn(_ config: BootstrapConfig) -> some View {
-        VStack(alignment: .leading, spacing: 24) {
-            Text(model.serverURL).foregroundStyle(.secondary)
-            if let problem = config.signInProblem {
-                Text(problem)
-            } else if let api = model.api, config.canPair, !passwordAsked {
-                PairingView(
-                    api: api,
-                    onSignedIn: { model.signedInAnew() },
-                    onUsePassword: config.canUsePassword ? { passwordAsked = true; error = nil } : nil)
-            } else if config.canUsePassword {
-                TextField("Username", text: $username)
-                    .textContentType(.username)
-                    .autocorrectionDisabled()
-                SecureField("Password", text: $password).textContentType(.password)
-                Button(busy ? "Signing in…" : "Sign in") { Task { await signIn() } }
-                    .disabled(busy || username.isEmpty || password.isEmpty)
-                if config.canPair {
-                    Button { passwordAsked = false; error = nil } label: {
-                        Label(PairingText.title, systemImage: "iphone")
-                    }
-                }
-            }
-            Button("Change server") {
-                connected = nil
-                error = nil
+    private func open(_ page: LaunchPage) {
+        serverError = nil
+        stack.append(page)
+    }
+
+    private func pop() {
+        if case let .signIn(_, _, _, true, returnTo?) = stack.last, session.model.serverURL != returnTo {
+            // A new address was tried and abandoned: the server it replaced comes back.
+            session.model.serverURL = returnTo
+            Task { _ = try? await session.model.refreshBootstrap() }
+        }
+        if stack.count > 1 {
+            stack.removeLast()
+        } else if fromAccount {
+            session.overApp = false
+        }
+    }
+
+    /// Chooses or removes a server, one at a time, and goes where it left the app.
+    private func act(_ move: @escaping () async throws -> ServerMove) {
+        guard !serverBusy else { return }
+        serverBusy = true
+        serverError = nil
+        Task {
+            let moved = (try? await move()) ?? .stayed
+            serverBusy = false
+            switch moved {
+            case .stayed:
+                if stack.last == .servers { pop() }
+            case .moved(let landing):
+                stack = [landing == .login ? .signIn() : .picker]
+            case .noServer:
+                stack = [.signIn(newServer: true)]
+            case .failed(let message):
+                serverError = message
             }
         }
     }
+}
 
-    private func signIn() async {
-        guard let api = model.api else { return }
-        busy = true
-        defer { busy = false }
-        error = nil
-        do {
-            try await api.signIn(username: username, password: password)
-            model.signedInAnew()
-        } catch {
-            self.error = error.localizedDescription
-        }
+/// Back pops the stack, when there is somewhere to go back to; at the bottom of the launch
+/// screens on their own, Back leaves the app as usual.
+private struct BackPops: ViewModifier {
+    let active: Bool
+    let pop: () -> Void
+
+    func body(content: Content) -> some View {
+        if active { content.onExitCommand(perform: pop) } else { content }
+    }
+}
+
+extension View {
+    /// The launch screens over the app (*Change user or server*), and the idle picker: the TV
+    /// app's root wears this.
+    func launchScreens(_ session: TVSession) -> some View {
+        modifier(LaunchScreensOverApp(session: session))
+    }
+}
+
+private struct LaunchScreensOverApp: ViewModifier {
+    @Bindable var session: TVSession
+    @Environment(\.scenePhase) private var phase
+
+    func body(content: Content) -> some View {
+        content
+            .fullScreenCover(isPresented: $session.overApp) {
+                ConnectView(fromAccount: true)
+                    .environment(session)
+                    .environment(session.model)
+            }
+            .onChange(of: phase) { _, phase in session.scenePhase(phase) }
     }
 }
