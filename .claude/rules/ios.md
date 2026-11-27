@@ -73,6 +73,14 @@ below are from the parent repository's root.
   `PairingView` with Core Image's QR code), with the password as the fallback, and only the code
   when the server has the password off. `TokenClient` (an actor) refreshes one at a time and rotates the
   refresh token, kept in the Keychain this-device-only; the access token stays in memory.
+- **Several accounts and servers are SovEmuKit logic**, ported from SovEmu.Android's
+  `Accounts`/`AccountStore`/`Connection`/`Launch` (same names, cases and v1 stored format):
+  `AccountStore` (the list, active id and device names in a `KeyValue`, each refresh token in an
+  `AccountTokenStore`, the Keychain this-device-only), *Who's watching?* and *Choose a server*
+  (`KnownServers`, `ServerChooser` over the app's `ServerService` and `AccountSession`), and the
+  proxy headers (`CustomHeaderRules`; `CustomHeaderInterceptor` puts them on every request to the
+  server's host and port, through `SovEmuAPI`'s and `TokenClient`'s `customHeaders`, never logged).
+  The app does not use them yet (the Apple TV app will, #38).
 
 ## Before a PR
 

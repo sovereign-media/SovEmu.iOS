@@ -400,11 +400,17 @@ public final class SovEmuAPI: Sendable {
     /// Sends none: `bootstrapConfig` is asked before the client knows where to sign in.
     private let anonymous: ApolloClient
 
-    public init(baseURL: URL, auth: TokenClient? = nil, session: URLSession = SovEmuAPI.makeSession()) {
+    /// - Parameter customHeaders: the person's proxy headers (`CustomHeaderRules`), read on every
+    ///   request and sent only to `baseURL`'s host and port, signed in or not. Give `auth` the
+    ///   same, for sign-in and refresh.
+    public init(
+        baseURL: URL, auth: TokenClient? = nil, session: URLSession = SovEmuAPI.makeSession(),
+        customHeaders: @escaping @Sendable () -> [CustomHeader] = { [] }
+    ) {
         self.baseURL = baseURL
         self.auth = auth
-        client = GraphQLClient.make(baseURL: baseURL, auth: auth, session: session)
-        anonymous = GraphQLClient.make(baseURL: baseURL, auth: nil, session: session)
+        client = GraphQLClient.make(baseURL: baseURL, auth: auth, session: session, headers: customHeaders)
+        anonymous = GraphQLClient.make(baseURL: baseURL, auth: nil, session: session, headers: customHeaders)
     }
 
     /// A session that neither sends nor stores cookies: the API authenticates with tokens.
