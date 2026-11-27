@@ -23,7 +23,7 @@ struct ArtworkTests {
 
     @Test func systemsSayTheirBoxShape() async throws {
         let stub = Stub { _, _ in
-            (200, ##"{"data":{"systems":[{"id":"snes","name":"Super Nintendo","short":"SNES","manufacturer":"Nintendo","year":1990,"color":"#000","gameCount":1,"playable":true,"needsGpu":false,"rendering":null,"biosMissing":false,"boxAspect":1.4}]}}"##)
+            (200, ##"{"data":{"systems":[{"id":"snes","name":"Super Nintendo","short":"SNES","manufacturer":"Nintendo","year":1990,"color":"#000","gameCount":1,"playable":true,"needsGpu":false,"rendering":null,"biosMissing":false,"boxAspect":1.4,"photoUrl":null}]}}"##)
         }
         let snes = try #require(try await SovEmuAPI(baseURL: stub.base, session: stub.session).systems().first)
         #expect(snes.boxAspect == 1.4)

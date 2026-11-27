@@ -71,6 +71,7 @@ fragment SystemFields on System {
   rendering
   biosMissing
   boxAspect
+  photoUrl
 }
 
 fragment SessionFields on GameSession {
@@ -169,6 +170,14 @@ query Viewer {
 query ClientConfig {
   clientConfig {
     iceServers
+  }
+}
+
+# The background behind every screen, the server's (the admin's choice); null for none.
+query Background {
+  background {
+    id
+    url
   }
 }
 

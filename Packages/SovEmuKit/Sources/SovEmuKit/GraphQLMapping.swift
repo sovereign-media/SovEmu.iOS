@@ -53,7 +53,7 @@ extension SystemSummary {
         self.init(
             id: f.id, name: f.name, short: f.short, manufacturer: f.manufacturer, year: f.year, color: f.color,
             gameCount: f.gameCount, playable: f.playable, needsGpu: f.needsGpu, rendering: f.rendering?.name,
-            biosMissing: f.biosMissing, boxAspect: f.boxAspect)
+            biosMissing: f.biosMissing, boxAspect: f.boxAspect, photoUrl: f.photoUrl)
     }
 }
 
