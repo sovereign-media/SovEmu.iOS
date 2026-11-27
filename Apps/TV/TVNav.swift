@@ -27,6 +27,9 @@ private enum DockMenu {
 
 struct MainView: View {
     @Environment(Library.self) private var library
+    @Environment(\.api) private var api
+    /// The admin's background behind every screen (Android TV's `NavFrame`); none is the surface.
+    @State private var background: String?
     @State private var section = TVSection.home
     @State private var home: [Route] = []
     @State private var search: [Route] = []
@@ -40,6 +43,7 @@ struct MainView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             Sov.surface.ignoresSafeArea()
+            RemoteImage(path: background).ignoresSafeArea()
             page
                 .padding(.leading, 64 * dp)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -55,6 +59,10 @@ struct MainView: View {
         }
         .focusScope(scope)
         .ignoresSafeArea()
+        .task(id: api?.baseURL) {
+            // Without a background the surface shows, as when the admin chose none: nothing to report.
+            background = try? await api?.background()
+        }
     }
 
     // MARK: - Pages

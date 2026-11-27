@@ -303,8 +303,20 @@ private struct TVSystemCard: View {
             NavigationLink(value: Route.system(system, open: nil)) {
                 ZStack {
                     tile(system.accent, mix: 0.35)
-                    // The server's photo of the hardware joins it once SovEmuKit reads it.
-                    Text(system.short).font(.system(size: 36 * dp, weight: .black)).foregroundStyle(.white)
+                    let short = Text(system.short).font(.system(size: 36 * dp, weight: .black)).foregroundStyle(.white)
+                    if let photo = system.photoUrl {
+                        // The server's photo of the hardware on the right, the short name on the
+                        // left, as on the web and Android TV.
+                        short.padding(.leading, 12 * dp).frame(maxWidth: .infinity, alignment: .leading)
+                        GeometryReader { box in
+                            RemoteImage(path: photo, contentMode: .fit)
+                                .frame(width: box.size.width * 0.58, height: box.size.height * 0.76)
+                                .padding(8 * dp)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                        }
+                    } else {
+                        short
+                    }
                     if let badge = system.badge {
                         Text(badge).font(.system(size: 11 * dp, weight: .semibold)).foregroundStyle(.white)
                             .padding(.horizontal, 8 * dp).padding(.vertical, 2 * dp)
