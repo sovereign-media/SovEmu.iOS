@@ -194,7 +194,37 @@ final class Controller {
         if let keyboard = GCKeyboard.coalesced?.keyboardInput {
             out[.keyboard] = Self.pressedKeys(keyboard)
         }
+        for controller in GCController.controllers() where controller.extendedGamepad == nil {
+            guard let remote = controller.microGamepad else { continue }
+            out[.pad(ObjectIdentifier(controller))] = Self.remoteInputs(remote)
+        }
         return out
+    }
+
+    // MARK: The Siri Remote
+
+    /// A Siri Remote (an Apple TV's, a micro gamepad) never plays: it moves through the menus as
+    /// a pad's D-pad and face buttons do. Its click pad's directions are the D-pad, a click
+    /// confirms (`south`), and Back goes back (`east`).
+    private static func remoteInputs(_ remote: GCMicroGamepad) -> Set<String> {
+        remote.reportsAbsoluteDpadValues = false
+        var out = Set<String>()
+        let x = remote.dpad.xAxis.value, y = remote.dpad.yAxis.value
+        if x < -0.5 { out.insert("left") }
+        if x > 0.5 { out.insert("right") }
+        if y > 0.5 { out.insert("up") }
+        if y < -0.5 { out.insert("down") }
+        if remote.buttonA.isPressed { out.insert("south") }
+        if remote.buttonMenu.isPressed { out.insert("east") }
+        return out
+    }
+
+    /// The remote's Back or Play/Pause pressed during play: the in-game menu, as a pad's Home.
+    private static func remoteMenuPressed(_ controllers: [GCController]) -> Bool {
+        controllers.contains { controller in
+            guard controller.extendedGamepad == nil, let remote = controller.microGamepad else { return false }
+            return remote.buttonMenu.isPressed || remote.buttonX.isPressed
+        }
     }
 
     // MARK: Play
@@ -284,7 +314,7 @@ final class Controller {
         }
         fastForward = fastForward || touchHotkeys.fastForward
         rewind = rewind || touchHotkeys.rewind
-        menu = menu || touchHotkeys.menu
+        menu = menu || touchHotkeys.menu || Self.remoteMenuPressed(controllers)
         ports[0] |= touchHotkeys.state
 
         return Reading(

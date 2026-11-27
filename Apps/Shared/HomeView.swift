@@ -69,7 +69,7 @@ private struct HomeContent: View {
             reopen = nil
             resumeId = id
         }
-        .inspector(isPresented: Binding(get: { resumeId != nil }, set: { if !$0 { resumeId = nil } })) {
+        .sidePanel(isPresented: Binding(get: { resumeId != nil }, set: { if !$0 { resumeId = nil } })) {
             if let game = feed.recent.first(where: { $0.id == resumeId }) {
                 let system = library.system(game.system)
                 ContinuePanel(
@@ -84,9 +84,6 @@ private struct HomeContent: View {
                         path.append(.system(system, open: game.id))
                     },
                     onClose: { resumeId = nil })
-                    .inspectorColumnWidth(min: 360, ideal: 420, max: 480)
-                    .presentationDetents([.medium, .large])
-                    .presentationBackground(Sov.surface)
             }
         }
     }

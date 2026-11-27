@@ -121,7 +121,9 @@ struct PlayerView: View {
                        status: session.map { loadingStatus(core: $0.core, width: $0.width, height: $0.height, fps: $0.fps) } ?? "",
                        network: LinkLabels.networkLabel(link?.path ?? ""))
             }
+            #if os(iOS)
             if showTouch && !menuOpen && session != nil && error == nil { TouchControls(controller: controller) }
+            #endif
             if let statsRows {
                 StatsOverlay(rows: statsRows, history: history)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -129,6 +131,8 @@ struct PlayerView: View {
                     .allowsHitTesting(false)
             }
             VStack {
+                // A TV opens the menu from the remote (Back or Play/Pause) or a controller's Home.
+                #if os(iOS)
                 HStack {
                     Spacer()
                     Button { menuOpen = true } label: {
@@ -137,6 +141,7 @@ struct PlayerView: View {
                     }
                     .foregroundStyle(.white)
                 }
+                #endif
                 Spacer()
                 if let toast {
                     Text(toast).padding(.horizontal, 16).padding(.vertical, 8)
@@ -166,7 +171,7 @@ struct PlayerView: View {
             }
             if menuOpen { menu }
         }
-        .statusBarHidden()
+        .playerChrome()
         .persistentSystemOverlays(.hidden)
         .task { await begin() }
         .task(id: session?.id) { await pollProgress() }
@@ -785,6 +790,7 @@ private struct LatencyGraph: View {
     }
 }
 
+#if os(iOS)
 /// An on-screen pad: D-pad bottom left, face buttons bottom right, Select/Start centre, L/R top.
 struct TouchControls: View {
     let controller: Controller
@@ -850,3 +856,4 @@ private struct PadButton: View {
             )
     }
 }
+#endif

@@ -45,10 +45,10 @@ struct SystemView: View {
             }
         }
         .navigationTitle(system.name)
-        .navigationBarTitleDisplayMode(.inline)
+        .inlineTitle()
         .task { library.want(system.id) }
         .onAppear { if openId == nil, let openFirst { openId = openFirst } }
-        .inspector(isPresented: Binding(get: { openId != nil }, set: { if !$0 { closePanel() } })) {
+        .sidePanel(isPresented: Binding(get: { openId != nil }, set: { if !$0 { closePanel() } })) {
             if let index = load.value, let game = index.games.first(where: { $0.id == openId }) {
                 GamePanel(
                     game: game, system: system, slots: slots, patches: patches, notice: notice,
@@ -61,9 +61,6 @@ struct SystemView: View {
                         Task { notice = await library.setPatch(game, patch).map { "Could not change the patch: \($0)" } }
                     },
                     onClose: closePanel)
-                    .inspectorColumnWidth(min: 360, ideal: 420, max: 480)
-                    .presentationDetents([.medium, .large])
-                    .presentationBackground(Sov.surface)
                     .sheet(isPresented: $collectionsOpen) {
                         CollectionsSheet(game: game).presentationDetents([.medium, .large])
                     }
@@ -434,7 +431,7 @@ private struct FilterSheet: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     TextField("Search titles, makers, genres", text: $query)
-                        .textFieldStyle(.roundedBorder).autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .roundedField().autocorrectionDisabled().textInputAutocapitalization(.never)
                     section("Lists") {
                         TogglePill(on: filters.favourites, action: { filters.favourites.toggle() }) {
                             Image(systemName: "heart").foregroundStyle(filters.favourites ? .white : Sov.red300)
@@ -484,7 +481,7 @@ private struct FilterSheet: View {
             }
             .background(Sov.surface)
             .navigationTitle(on > 0 ? "Filters · \(on) on" : "Filters")
-            .navigationBarTitleDisplayMode(.inline)
+            .inlineTitle()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
     }
