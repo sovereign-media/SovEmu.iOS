@@ -62,14 +62,11 @@ extension View {
         #endif
     }
 
-    /// The player's screen. On iOS, no status bar. On a TV, it holds the focus and swallows
-    /// Back (a controller's B as much as the remote's), which would otherwise leave the app: the
-    /// game reads controllers directly, and the remote's Back opens the in-game menu through
-    /// `Controller`.
+    /// The player's screen: no status bar on iOS; on a TV it holds the focus, so the remote's
+    /// commands reach the player (which handles them).
     @ViewBuilder func playerChrome() -> some View {
         #if os(tvOS)
         focusable()
-            .onExitCommand {}
         #else
         statusBarHidden()
         #endif

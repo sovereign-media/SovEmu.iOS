@@ -201,6 +201,15 @@ final class Controller {
         return out
     }
 
+    /// Whether a controller (not the remote) has anything held: a command tvOS raised just now
+    /// came from it, and the game or the polled menu has it already.
+    static func padActive() -> Bool {
+        GCController.controllers().contains { controller in
+            guard let pad = controller.extendedGamepad else { return false }
+            return !pressedInputs(pad).isEmpty || !stickDirections(pad).isEmpty
+        }
+    }
+
     // MARK: The Siri Remote
 
     /// A Siri Remote (an Apple TV's, a micro gamepad) never plays: it moves through the menus as

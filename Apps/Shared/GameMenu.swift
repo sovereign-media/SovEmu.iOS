@@ -303,6 +303,13 @@ final class GameMenu {
         }
     }
 
+    /// One action from somewhere other than a polled controller: the Apple TV remote, through
+    /// tvOS's own move, select and Back commands. Ignored while a remapping waits for an input.
+    func act(_ action: MenuAction, main: [MenuItem], close: @escaping () -> Void) {
+        guard capture == nil else { return }
+        perform(action, items(main: main, close: close), close: close)
+    }
+
     private func perform(_ action: MenuAction, _ rows: [MenuItem], close: () -> Void) {
         guard !rows.isEmpty else {
             if action == .back || action == .confirm { back(close) }

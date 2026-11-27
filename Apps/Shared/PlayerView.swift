@@ -5,10 +5,10 @@ import WebRTC
 
 /// The stream's video view.
 struct VideoView: UIViewRepresentable {
-    let view: RTCMTLVideoView
+    let view: SampleBufferVideoView
 
-    func makeUIView(context: Context) -> RTCMTLVideoView { view }
-    func updateUIView(_ uiView: RTCMTLVideoView, context: Context) {}
+    func makeUIView(context: Context) -> SampleBufferVideoView { view }
+    func updateUIView(_ uiView: SampleBufferVideoView, context: Context) {}
 }
 
 /// Systems whose picture keeps its own shape rather than a TV's 4:3.
@@ -99,12 +99,8 @@ struct PlayerView: View {
     @State private var gameMenu: GameMenu?
     /// The system's buttons and pad, and the controllers' diagrams, for remapping.
     @State private var controls: ControlsInfo?
-    @State private var video: RTCMTLVideoView = {
-        let v = RTCMTLVideoView(frame: .zero)
-        // The whole frame, stretched to the console's shape (the box it is in): never cropped.
-        v.videoContentMode = .scaleToFill
-        return v
-    }()
+    /// The whole frame, stretched to the console's shape (the box it is in): never cropped.
+    @State private var video = SampleBufferVideoView(frame: .zero)
 
     private static var hasInputDevice: Bool { !GCController.controllers().isEmpty || GCKeyboard.coalesced != nil }
 
@@ -173,8 +169,22 @@ struct PlayerView: View {
         }
         .playerChrome()
         #if os(tvOS)
-        // The remote's Play/Pause, also where GameController does not list the remote.
-        .onPlayPauseCommand { if !menuOpen { menuOpen = true } }
+        // The remote, through tvOS's commands (GameController does not see it on an Apple TV):
+        // Back or Play/Pause opens the menu; in the menu the click pad moves, a click chooses and
+        // Back goes back. A controller raises the same commands, but it plays the game and
+        // drives the menu by polling, so its commands are dropped here.
+        .onExitCommand { remote(.back) }
+        .onPlayPauseCommand { remote(menuOpen ? .confirm : .back) }
+        .onMoveCommand { direction in
+            switch direction {
+            case .up: remote(.up)
+            case .down: remote(.down)
+            case .left: remote(.left)
+            case .right: remote(.right)
+            @unknown default: break
+            }
+        }
+        .onTapGesture { remote(.confirm) }
         #endif
         .persistentSystemOverlays(.hidden)
         .task { await begin() }
@@ -270,6 +280,19 @@ struct PlayerView: View {
     private var currentDisc: Int { disc ?? session?.disc ?? 1 }
 
     /// The rows of the page shown: the main page's, or a picker's.
+    #if os(tvOS)
+    /// An action from the remote: in play, Back opens the menu; in the menu, every action is the
+    /// menu's.
+    private func remote(_ action: MenuAction) {
+        guard !Controller.padActive() else { return }
+        if !menuOpen {
+            if action == .back { menuOpen = true }
+            return
+        }
+        gameMenu?.act(action, main: pageItems, close: close)
+    }
+    #endif
+
     private var pageItems: [MenuItem] {
         switch menuPage {
         case .main: return mainItems
