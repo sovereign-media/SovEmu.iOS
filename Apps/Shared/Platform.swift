@@ -4,6 +4,15 @@
 // dimmed screen and takes the focus, as SovEmu.Android's TV side panels do, and Menu closes it.
 import SwiftUI
 
+/// A size for a phone or tablet, or a TV's (seen from across a room, at 1920 points wide).
+func onTV(_ value: CGFloat, tv: CGFloat) -> CGFloat {
+    #if os(tvOS)
+    tv
+    #else
+    value
+    #endif
+}
+
 extension View {
     /// A page title kept small: inline in the navigation bar on iOS; tvOS has no bar to put it in.
     @ViewBuilder func inlineTitle() -> some View {

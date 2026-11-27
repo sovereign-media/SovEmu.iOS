@@ -8,7 +8,14 @@ import WebRTC
 final class Stream: NSObject {
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
-        return RTCPeerConnectionFactory(encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory())
+        // The audio engine module records only once a local audio track starts, and SovEmu sends
+        // none. The platform default's voice-processing unit opens the microphone just to play,
+        // which needs a microphone permission (a TV kills the app without one) for audio that
+        // only ever comes in.
+        return RTCPeerConnectionFactory(
+            audioDeviceModuleType: .audioEngine, bypassVoiceProcessing: true,
+            encoderFactory: RTCDefaultVideoEncoderFactory(), decoderFactory: RTCDefaultVideoDecoderFactory(),
+            audioProcessingModule: nil)
     }()
 
     private let api: SovEmuAPI

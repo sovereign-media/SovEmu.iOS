@@ -2,6 +2,7 @@
 // they start to use gets its line here.
 @_exported import LiveKitWebRTC
 
+public typealias RTCAudioDeviceModuleType = LKRTCAudioDeviceModuleType
 public typealias RTCConfiguration = LKRTCConfiguration
 public typealias RTCDataBuffer = LKRTCDataBuffer
 public typealias RTCDataChannel = LKRTCDataChannel

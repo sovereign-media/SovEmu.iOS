@@ -18,7 +18,7 @@ struct SearchView: View {
                 if let line = summary {
                     Text(line).font(.system(size: 14)).foregroundStyle(isFailure ? Sov.red300 : Sov.slate400)
                 }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), spacing: 16)], spacing: 24) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: onTV(160, tv: 250)), spacing: onTV(16, tv: 40))], spacing: 24) {
                     ForEach(results?.value ?? []) { GameCard(game: $0, wide: false) }
                 }
             }

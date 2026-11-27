@@ -36,6 +36,10 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.4), value: screensaver)
+        // Here rather than at the app's scene: this view draws again when someone signs in, so
+        // what loads from the server gets the client that signed in (`AppModel.api` itself is
+        // not observed).
+        .environment(\.api, model.api)
         .fullScreenCover(item: $playing) { request in
             PlayerView(system: request.system, game: request.game, start: request.start) {
                 playing = nil

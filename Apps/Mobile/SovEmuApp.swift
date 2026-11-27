@@ -17,7 +17,6 @@ struct SovEmuApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
-                .environment(\.api, model.api)
                 .environment(library)
                 .environment(settings)
                 .preferredColorScheme(.dark)

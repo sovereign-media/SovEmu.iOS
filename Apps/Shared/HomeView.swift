@@ -207,10 +207,10 @@ private struct HomeRow<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            SectionTitle(title: title, symbol: symbol).padding(.horizontal, 24)
+            SectionTitle(title: title, symbol: symbol).padding(.horizontal, onTV(24, tv: 60))
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) { content() }
-                    .padding(.horizontal, 24).padding(.vertical, 12)
+                LazyHStack(alignment: .top, spacing: onTV(16, tv: 40)) { content() }
+                    .padding(.horizontal, onTV(24, tv: 60)).padding(.vertical, onTV(12, tv: 30))
             }
         }
     }
@@ -263,7 +263,7 @@ struct GameCard: View {
             }
             .padding(.horizontal, 2)
         }
-        .frame(width: wide ? 288 : 160)
+        .frame(width: onTV(wide ? 288 : 160, tv: wide ? 460 : 250))
     }
 }
 
@@ -284,7 +284,7 @@ private struct SystemCard: View {
                             .padding(.horizontal, 12).padding(.vertical, 8)
                     }
                 }
-                .frame(width: 224, height: 128)
+                .frame(width: onTV(224, tv: 340), height: onTV(128, tv: 194))
                 .clipShape(RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).stroke(.white.opacity(0.1), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 2) {
@@ -294,7 +294,7 @@ private struct SystemCard: View {
                 }
                 .padding(.horizontal, 2)
             }
-            .frame(width: 224)
+            .frame(width: onTV(224, tv: 340))
         }
         .cardButtonStyle()
     }

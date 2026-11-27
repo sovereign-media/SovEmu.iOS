@@ -108,7 +108,7 @@ struct SystemView: View {
                             .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.15), lineWidth: 1))
                             .padding(.vertical, 48)
                     }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: size == .regular ? 152 : 140), spacing: 16)], spacing: 24) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: onTV(size == .regular ? 152 : 140, tv: 250)), spacing: onTV(16, tv: 40))], spacing: 24) {
                         ForEach(shown) { game in
                             CoverCard(game: game, system: system, isOpen: game.id == openId) { openId = game.id }
                                 .id(game.id)
