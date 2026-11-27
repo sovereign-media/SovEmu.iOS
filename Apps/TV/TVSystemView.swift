@@ -325,7 +325,7 @@ struct TVSystemView: View {
 /// game and a tick for one played before, with its title and a year and players line under it.
 /// Focused, the cover grows 5% with a white ring, as Android's `FocusCard`; the open game's has an
 /// accent edge.
-private struct TVCoverCard: View {
+struct TVCoverCard: View {
     let game: Game
     let system: SystemSummary
     let isOpen: Bool

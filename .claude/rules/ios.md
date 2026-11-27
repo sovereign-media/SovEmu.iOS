@@ -8,7 +8,8 @@ paths:
 
 # SovEmu.iOS
 
-One SwiftUI app, `SovEmu`, for iPhone and iPad (iOS 18; there is no tvOS target). How Swift is
+Two SwiftUI apps: `SovEmu` for iPhone and iPad (iOS 18), and `SovEmuTV` for Apple TV (tvOS 18,
+after SovEmu.Android's TV app at 1 dp = 1.5 points). How Swift is
 written is [ios-swift.md](ios-swift.md); tests are [ios-tests.md](ios-tests.md). Paths into SovEmu
 below are from the parent repository's root.
 
@@ -20,8 +21,14 @@ below are from the parent repository's root.
   sign-in, controllers, game lists, latency and stream statistics, with Swift Testing tests
   (`swift test` on the host). It imports Foundation, Synchronization, Security, CryptoKit (PKCE) and Apollo only, and
   builds in Swift 6 language mode (tools 6.0).
-- **`Apps/Mobile` only draws and does I/O**: SwiftUI views, GameController, WebRTC, AVFoundation.
-  It builds in Swift 5 mode only because it wraps WebRTC's Objective-C delegates. Logic that a
+- **The apps only draw and do I/O**: SwiftUI views, GameController, WebRTC, AVFoundation.
+  `Apps/Shared` is in both targets (the player, the stream, controllers, the shared screens and
+  `Platform.swift`'s adapters, where an iOS and a tvOS difference lives); `Apps/Mobile` is the
+  iPhone and iPad app's own, `Apps/TV` the Apple TV's (its dock, Home, system page, search,
+  sign-in and accounts, in-game menu). On tvOS the player owns the controllers and the remote
+  while a game is on screen (`GameControllers`, GameController's event view controller): every
+  press reaches it through GameController only, never as tvOS's Back or focus moves.
+  Both build in Swift 5 mode only because it wraps WebRTC's Objective-C delegates. Logic that a
   test could check moves down into SovEmuKit.
 - **WebRTC is a binary package**, `Packages/WebRTC`: LiveKit's build of libwebrtc (it has tvOS
   slices), fetched by `scripts/fetch-webrtc.sh` (pinned by SHA-256, gitignored). LiveKit prefixes
@@ -88,4 +95,6 @@ below are from the parent repository's root.
 What CI runs: `scripts/codegen.sh --check`, `swift test` in `Packages/SovEmuKit`,
 `scripts/fetch-webrtc.sh`, `xcodegen generate`,
 then `xcodebuild -project SovEmu.xcodeproj -scheme SovEmu -destination 'generic/platform=iOS
-Simulator' CODE_SIGNING_ALLOWED=NO build`. Check what a user sees on the simulator.
+Simulator' CODE_SIGNING_ALLOWED=NO build`, and the same for `-scheme SovEmuTV` with
+`'generic/platform=tvOS Simulator'`. Check what a user sees on the simulator; controllers and
+the Siri Remote on a real Apple TV (a debug build traces input on its console, `inputTrace`).

@@ -72,7 +72,7 @@ struct MainView: View {
         case .home:
             NavigationStack(path: $home) { TVHomeView(path: $home).routes().backToDock(home.isEmpty) { docked = .home } }
         case .search:
-            NavigationStack(path: $search) { TVSearchView().routes().backToDock(search.isEmpty) { docked = .search } }
+            NavigationStack(path: $search) { TVSearchView(path: $search).routes().backToDock(search.isEmpty) { docked = .search } }
         case .systems:
             NavigationStack(path: $systems) {
                 Group {

@@ -8,6 +8,9 @@ import SwiftUI
 
 struct TVSearchView: View {
     @Environment(AppModel.self) private var model
+    @Environment(Library.self) private var library
+    /// The Search tab's way back: a result opens its system's page with its panel open.
+    @Binding var path: [Route]
     /// Kept with the screen, so Back from a system shows the same results.
     @State private var query = ""
     @State private var results: Load<[Game]>?
@@ -30,7 +33,14 @@ struct TVSearchView: View {
                 columns: [GridItem(.adaptive(minimum: 160 * launchDp), spacing: 16 * launchDp, alignment: .top)],
                 alignment: .leading, spacing: 24 * launchDp
             ) {
-                ForEach(results?.value ?? []) { GameCard(game: $0, wide: false) }
+                // The system page's covers, as Android TV's search shows them.
+                ForEach(results?.value ?? []) { game in
+                    if let system = library.system(game.system) {
+                        TVCoverCard(game: game, system: system, isOpen: false) {
+                            path.append(.system(system, open: game.id))
+                        }
+                    }
+                }
             }
             .focusSection()
             .padding(.bottom, 112 * launchDp)
