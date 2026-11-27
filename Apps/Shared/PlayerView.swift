@@ -341,7 +341,8 @@ struct PlayerView: View {
     private func remote(_ action: MenuAction) {
         guard !Controller.padActive() else { return }
         if !menuOpen {
-            if action == .back { menuOpen = true }
+            // A controller's B that closed the menu also raises Back: that copy must not reopen it.
+            if action == .back, gameMenu?.isEcho(.back, polled: false) != true { menuOpen = true }
             return
         }
         gameMenu?.act(action, main: pageItems, close: close)

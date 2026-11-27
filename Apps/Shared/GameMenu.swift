@@ -351,7 +351,7 @@ final class GameMenu {
             watchers[key] = watcher
             let before = page
             for input in pressed.sorted() {
-                guard let action = MenuAction.of(input) else { continue }
+                guard let action = MenuAction.of(input), !isEcho(action, polled: true) else { continue }
                 perform(action, rows, close: close)
                 // A row may have changed the page or started a capture: read the rest next time.
                 if capture != nil || page != before { return }
@@ -362,8 +362,26 @@ final class GameMenu {
     /// One action from somewhere other than a polled controller: the Apple TV remote, through
     /// tvOS's own move, select and Back commands. Ignored while a remapping waits for an input.
     func act(_ action: MenuAction, main: [MenuItem], close: @escaping () -> Void) {
-        guard capture == nil else { return }
+        guard capture == nil, !isEcho(action, polled: false) else { return }
         perform(action, items(main: main, close: close), close: close)
+    }
+
+    /// The last action taken, whether it was polled, and when (system uptime, seconds).
+    private var lastAction: (action: MenuAction, polled: Bool, at: TimeInterval)?
+
+    /// Whether this action is the second copy of one press. On an Apple TV a controller raises
+    /// tvOS's move, select and Back commands as well as being polled, and the remote can be
+    /// polled as well as raising them: one press reaches the menu once from each, in either
+    /// order. The copy from the other source within 0.3 s is dropped (once: a third press is
+    /// real); repeated presses from one source are never dropped.
+    func isEcho(_ action: MenuAction, polled: Bool) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastAction, last.action == action, last.polled != polled, now - last.at < 0.3 {
+            lastAction = nil
+            return true
+        }
+        lastAction = (action, polled, now)
+        return false
     }
 
     private func perform(_ action: MenuAction, _ rows: [MenuItem], close: () -> Void) {
