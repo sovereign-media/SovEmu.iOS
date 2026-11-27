@@ -28,6 +28,7 @@ extension SovEmuGraphQL {
     static let configuration: any ApolloAPI.SchemaConfiguration.Type = SchemaConfiguration.self
 
     private static let objectTypeMap: [String: ApolloAPI.Object] = [
+      "Background": SovEmuGraphQL.Objects.Background,
       "Binding": SovEmuGraphQL.Objects.Binding,
       "BootstrapConfig": SovEmuGraphQL.Objects.BootstrapConfig,
       "Cheat": SovEmuGraphQL.Objects.Cheat,

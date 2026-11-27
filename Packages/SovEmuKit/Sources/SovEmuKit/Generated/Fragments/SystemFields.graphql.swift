@@ -7,7 +7,7 @@
 extension SovEmuGraphQL {
   nonisolated struct SystemFields: SovEmuGraphQL.SelectionSet, Fragment {
     static var fragmentDefinition: StaticString {
-      #"fragment SystemFields on System { __typename id name short manufacturer year color gameCount playable needsGpu rendering biosMissing boxAspect }"#
+      #"fragment SystemFields on System { __typename id name short manufacturer year color gameCount playable needsGpu rendering biosMissing boxAspect photoUrl }"#
     }
 
     let __data: DataDict
@@ -28,6 +28,7 @@ extension SovEmuGraphQL {
       .field("rendering", GraphQLEnum<SovEmuGraphQL.Rendering>?.self),
       .field("biosMissing", Bool.self),
       .field("boxAspect", Double.self),
+      .field("photoUrl", String?.self),
     ] }
     static var __fulfilledFragments: [any ApolloAPI.SelectionSet.Type] { [
       SystemFields.self
@@ -53,6 +54,9 @@ extension SovEmuGraphQL {
     /// The shape of its games' boxes, width over height (US and European releases): game cards
     /// take it so box art fills them.
     var boxAspect: Double { __data["boxAspect"] }
+    /// A photo of its hardware for its card (a transparent cut-out): SovEmu's, or the admin's own
+    /// from `<data>/systems/<id>.webp`. A URL signed for this user; null when it has none.
+    var photoUrl: String? { __data["photoUrl"] }
   }
 
 }

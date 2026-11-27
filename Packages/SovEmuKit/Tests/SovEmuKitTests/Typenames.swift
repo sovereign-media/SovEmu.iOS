@@ -14,7 +14,7 @@ enum Typenames {
         "setCheatEnabled": "Cheat", "startSession": "GameSession", "startProgress": "StartStatus",
         "controllerMappings": "ControllerMapping", "saveControllerMapping": "ControllerMapping", "bindings": "Binding",
         "controls": "SystemControls", "buttons": "SystemButton", "sticks": "SystemStick", "layout": "PadLayout",
-        "controllerLayouts": "PadLayout", "body": "Shape", "keys": "PadKey",
+        "controllerLayouts": "PadLayout", "body": "Shape", "keys": "PadKey", "background": "Background",
     ]
 
     /// `json` with `__typename` on every object under a known field of `data`; anything else

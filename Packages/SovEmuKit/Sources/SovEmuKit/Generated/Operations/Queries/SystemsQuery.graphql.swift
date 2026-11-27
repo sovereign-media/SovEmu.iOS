@@ -67,6 +67,9 @@ extension SovEmuGraphQL {
         /// The shape of its games' boxes, width over height (US and European releases): game cards
         /// take it so box art fills them.
         var boxAspect: Double { __data["boxAspect"] }
+        /// A photo of its hardware for its card (a transparent cut-out): SovEmu's, or the admin's own
+        /// from `<data>/systems/<id>.webp`. A URL signed for this user; null when it has none.
+        var photoUrl: String? { __data["photoUrl"] }
 
         struct Fragments: FragmentContainer {
           let __data: DataDict
