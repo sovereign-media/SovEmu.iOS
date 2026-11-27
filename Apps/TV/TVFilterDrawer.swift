@@ -35,8 +35,8 @@ struct TVFilterDrawer: View {
                     HStack(alignment: .top, spacing: 12 * dp) {
                         choice(.played, "Played", [
                             TVOption(value: PlayedFilter?.none, label: "Any"),
-                            TVOption(value: PlayedFilter.played, label: "Played before"),
-                            TVOption(value: PlayedFilter.unplayed, label: "Not played yet"),
+                            TVOption(value: PlayedFilter?.some(.played), label: "Played before"),
+                            TVOption(value: PlayedFilter?.some(.unplayed), label: "Not played yet"),
                         ], selected: filters.played) { filters.played = $0 }
                         choice(.favourites, "Favourites", [
                             TVOption(value: false, label: "Any"),
