@@ -15,8 +15,8 @@ options:
 packages:
   SovEmuKit:
     path: Packages/SovEmuKit
-  # A local wrapper around the xcframework scripts/fetch-webrtc.sh downloads (stasel/WebRTC
-  # 157.0.0, pinned by SHA-256). Run that script before generating the project.
+  # A local wrapper around the xcframework scripts/fetch-webrtc.sh downloads (LiveKit's libwebrtc
+  # 150.7871.09, pinned by SHA-256). Run that script before generating the project.
   WebRTC:
     path: Packages/WebRTC
 
