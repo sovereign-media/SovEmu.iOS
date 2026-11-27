@@ -33,8 +33,8 @@ extension SovEmuGraphQL {
       ] }
 
       /// Signs a TV in as you: the code its *Sign in with your phone* screen shows, typed on a
-      /// phone or tablet already signed in here (*Sign in a TV*). The same approval the server's
-      /// `/device` page gives in a browser. `NOT_FOUND` when no TV is waiting with that code;
+      /// phone or tablet already signed in here (*Sign in a TV*), or on the web client's `/link/`
+      /// page, where the TV sends people. `NOT_FOUND` when no TV is waiting with that code;
       /// `TOO_MANY_REQUESTS` after several wrong ones.
       var approveDeviceCode: Bool { __data["approveDeviceCode"] }
     }
