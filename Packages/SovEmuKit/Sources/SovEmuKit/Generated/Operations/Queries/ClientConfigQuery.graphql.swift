@@ -44,7 +44,8 @@ extension SovEmuGraphQL {
           ClientConfigQuery.Data.ClientConfig.self
         ] }
 
-        /// `RTCIceServer` objects (STUN/TURN) for WebRTC, from `SovEmu__Streaming__IceServers`.
+        /// `RTCIceServer` objects for WebRTC: the STUN servers, then the built-in relay (TURN) with
+        /// this player's own credentials, when it runs.
         var iceServers: SovEmuGraphQL.JSON { __data["iceServers"] }
       }
     }

@@ -656,7 +656,8 @@ input ClientCapabilitiesInput {
 
 type ClientConfig {
 	"""
-	`RTCIceServer` objects (STUN/TURN) for WebRTC, from `SovEmu__Streaming__IceServers`.
+	`RTCIceServer` objects for WebRTC: the STUN servers, then the built-in relay (TURN) with
+	this player's own credentials, when it runs.
 	"""
 	iceServers: JSON!
 }
@@ -2039,8 +2040,8 @@ type Mutation {
 	setup(username: String!, password: String!): User!
 	"""
 	Signs a TV in as you: the code its *Sign in with your phone* screen shows, typed on a
-	phone or tablet already signed in here (*Sign in a TV*). The same approval the server's
-	`/device` page gives in a browser. `NOT_FOUND` when no TV is waiting with that code;
+	phone or tablet already signed in here (*Sign in a TV*), or on the web client's `/link/`
+	page, where the TV sends people. `NOT_FOUND` when no TV is waiting with that code;
 	`TOO_MANY_REQUESTS` after several wrong ones.
 	"""
 	approveDeviceCode(userCode: String!): Boolean!

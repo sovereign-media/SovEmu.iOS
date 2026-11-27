@@ -3,7 +3,7 @@
 #
 # The schema lives in SovEmu (SovEmu.Backend/SovEmu.Server/schema.graphql, kept current by a
 # server test). This repository keeps a copy so it builds on its own, as SovEmu.Android does
-# (`./gradlew :core:syncSchema`). Run it when the server's schema changes; by default it reads the
+# (`./gradlew :common:core:syncSchema`). Run it when the server's schema changes; by default it reads the
 # parent checkout this repository is a submodule of, or the path given.
 set -eu
 cd "$(dirname "$0")/.."
