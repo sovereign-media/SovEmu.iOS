@@ -95,10 +95,18 @@ public let noPictureHintMs: Int64 = 20_000
 private let network = (from: 0.85, to: 0.97)
 
 /// The session is ready and this app is reaching it (ICE, then DTLS): nothing to show of the
-/// game yet, and the worker's check of the connection comes once connected.
-public func describeConnecting(waitedMs: Int64) -> LaunchView {
+/// game yet, and the worker's check of the connection comes once connected. `attempt`: the
+/// reconnects so far (`ReconnectWatch`), 0 for the first connection.
+public func describeConnecting(waitedMs: Int64, attempt: Int = 0) -> LaunchView {
     let seconds = waitedMs / 1000
-    return LaunchView(label: "Connecting", detail: seconds >= 3 ? "\(seconds) s" : "", fraction: network.from)
+    return LaunchView(label: attempt > 0 ? "Reconnecting" : "Connecting", detail: seconds >= 3 ? "\(seconds) s" : "",
+                      fraction: network.from)
+}
+
+/// The loading screen once reconnecting has given up.
+public func describeConnectionFailed() -> LaunchView {
+    LaunchView(label: "Could not connect to the game",
+               detail: "The server's game ports may be unreachable from here · \(menuKey) opens the menu", fraction: 0)
 }
 
 /// The check of the player's connection before the stream starts (`0x83`, #243): the worker
@@ -184,12 +192,17 @@ public enum GameStart {
     /// error); then, until `pictureShown`: connecting until the worker's first `link` (an older
     /// worker sends none, and its picture comes at once), the check of the connection while it
     /// is `probing`, and the wait for the picture, `waitedMs` so far; then nil. The bar never
-    /// falls below `bar`, the furthest it has been.
+    /// falls below `bar`, the furthest it has been. `attempt` reconnects so far say
+    /// "Reconnecting"; `connectionFailed`, reconnecting gave up before a picture.
     public static func screen(
         title: String, error: String?, progress: StartStatus?, bar: Double, ready: Bool, link: WireProtocol.Link? = nil,
-        pictureShown: Bool, waitedMs: Int64
+        pictureShown: Bool, waitedMs: Int64, attempt: Int = 0, connectionFailed: Bool = false
     ) -> StartScreen? {
         if let error { return StartScreen(label: error) }
+        if connectionFailed, !pictureShown {
+            let view = describeConnectionFailed()
+            return StartScreen(label: view.label, detail: view.detail)
+        }
         if !ready {
             guard let progress else { return StartScreen(label: "Starting \(title)…", fraction: bar) }
             let view = describeStart(progress)
@@ -201,7 +214,7 @@ public enum GameStart {
         let view = if let link {
             link.state == WireProtocol.Link.probing ? describeLink(link) : describeFirstPicture(waitedMs: waitedMs)
         } else {
-            describeConnecting(waitedMs: waitedMs)
+            describeConnecting(waitedMs: waitedMs, attempt: attempt)
         }
         return StartScreen(label: view.label, detail: view.detail, fraction: max(bar, view.fraction))
     }

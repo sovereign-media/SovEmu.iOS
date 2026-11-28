@@ -4,9 +4,14 @@ import Synchronization
 import WebRTC
 
 /// A connection to one game session: receive-only video and audio, plus the unordered,
-/// no-retransmit `input` DataChannel. Signalling is one POST of the complete offer (non-trickle),
-/// exactly as the web and Android clients do.
-final class Stream: NSObject {
+/// no-retransmit `input` DataChannel, which `InputLoop` sends on. Signalling is one POST of the
+/// complete offer (non-trickle), exactly as the web and Android clients do.
+///
+/// Made off the main thread while the game loads (its peer connection takes a moment), then used
+/// on it. `@unchecked Sendable` for that handover: after `init`, its own state is touched on the
+/// main thread only (the callbacks, `link`, `pipeline`, `closed`), but for what WebRTC's threads
+/// reach, which is under a lock (`rtts`, `FrameTap`, `FrameLatency`) or a Mutex (`gathered`).
+final class Stream: NSObject, @unchecked Sendable {
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
         // The audio engine module records only once a local audio track starts, and SovEmu sends
@@ -19,50 +24,28 @@ final class Stream: NSObject {
             audioProcessingModule: nil)
     }()
 
+    /// Most audio packets the jitter buffer may hold: 150 ms at the server's 10 ms a packet,
+    /// which holds the buffer's own target to about 110 ms, as SovEmu.Android's.
+    private static let audioBufferMaxPackets: Int32 = 15
+
     private let api: SovEmuAPI
-    private let sessionId: String
-    private let controller: Controller
     private let videoView: RTCVideoRenderer
     /// What this device decodes and shows, sent with the offer: the server picks the codec by it.
     private let capabilities: ClientCapabilities
-    /// Read on the main thread (`UIDevice`), when the stream is made.
-    private let clientName = ClientEvents.clientName
+    /// Read on the main thread (`UIDevice`), and handed in.
+    private let clientName: String
     private var pc: RTCPeerConnection!
-    private var channel: RTCDataChannel!
+    /// The input channel, for `InputLoop`.
+    private(set) var channel: RTCDataChannel!
     /// ICE gathering finished, or the wait for it gave up.
     private let gathered = OneShot()
-    private var timer: DispatchSourceTimer?
-    /// Where the input pump runs, every 4 ms.
-    private let inputQueue = DispatchQueue(label: "sovemu.input")
     /// Samples the connection's stats for the worker, on the main thread.
     private var statsTimer: Timer?
     private var sampler = StatsSampler()
     private var closed = false
-    private var seq: UInt32 = 0
-    private var sent: [UInt16] = []
-    private var sentHotkeys: UInt8 = 0
-    private var lastSend = Date.distantPast
-    private var analogSeq: UInt32 = 0
-    private var sentAnalog: [WireProtocol.Analog] = [.centred]
-    private var lastAnalogSend = Date.distantPast
-    /// The most ports sent this session: a player whose controller went away is then sent as
-    /// released and centred rather than dropped.
-    private var portCount = 1
 
-    /// While true (a menu is open) the game sees nothing pressed.
-    var suspended = false
-    /// While true (the app is not in the foreground: Home or TV pressed, Control Center, a
-    /// system alert) the game sees nothing pressed. Going out, the release is sent at once: an
-    /// app suspended with a button held went silent, and the worker let go only after its
-    /// half-second lapse, the button held all that time (SovEmu.iOS#43). As SovEmu.Android's
-    /// `Controller.lostFocus`, it does not pause: the in-game menu does that.
-    var inactive = false {
-        didSet {
-            if inactive && !oldValue { inputQueue.async { [weak self] in self?.pump() } }
-        }
-    }
+    /// Called on the main thread.
     var onState: ((RTCPeerConnectionState) -> Void)?
-    var onMenu: (() -> Void)?
     /// How the worker makes this stream (`0x82`), the latest the worker sent; nil until it
     /// sends one (an older server never does). Set on the main thread, for a stats overlay.
     private(set) var pipeline: WireProtocol.Pipeline?
@@ -80,7 +63,6 @@ final class Stream: NSObject {
     /// Each second's stats, as sent to the worker, and the reading they came from. Called on the
     /// main thread.
     var onStats: ((WireProtocol.Stats, StatsReading) -> Void)?
-    private var menuHeld = false
 
     /// Button to frame, measured from the worker's acks and the frames shown after them.
     let frameLatency = FrameLatency()
@@ -99,18 +81,26 @@ final class Stream: NSObject {
     /// The recent input round trips, in ms.
     var inputRtts: [Int64] { rttLock.withLock { rtts } }
 
-    init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer,
-         capabilities: ClientCapabilities) {
+    /// Builds the peer connection, its transceivers and the input channel: any thread.
+    init(api: SovEmuAPI, iceServers: [IceServer], videoView: RTCVideoRenderer, capabilities: ClientCapabilities,
+         clientName: String) {
         self.api = api
-        self.sessionId = sessionId
-        self.controller = controller
         self.videoView = videoView
         self.capabilities = capabilities
+        self.clientName = clientName
         super.init()
         tap.latency = frameLatency
         tap.onFirst = { [weak self] in DispatchQueue.main.async { self?.onFirstFrame?() } }
         let config = RTCConfiguration()
         config.sdpSemantics = .unifiedPlan
+        // One transport for video, audio and the channel, RTCP on it too: fewer candidate pairs
+        // to check, and the worker offers nothing else.
+        config.bundlePolicy = .maxBundle
+        config.rtcpMuxPolicy = .require
+        // Sound a little late beats sound that drifts further behind the picture: the buffer is
+        // capped, and catches up quickly after a burst.
+        config.audioJitterBufferMaxPackets = Self.audioBufferMaxPackets
+        config.audioJitterBufferFastAccelerate = true
         config.iceServers = iceServers.map { RTCIceServer(urlStrings: $0.urls, username: $0.username, credential: $0.credential) }
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         pc = Self.factory.peerConnection(with: config, constraints: constraints, delegate: self)
@@ -125,9 +115,10 @@ final class Stream: NSObject {
         channel.delegate = self
     }
 
-    /// Offers and connects. Cancelled (the player left), it throws `CancellationError` and starts
-    /// nothing; the caller closes the stream.
-    func connect() async throws {
+    /// Offers to the session `sessionId` and connects. Cancelled (the player left, or the
+    /// connection is being replaced), it throws `CancellationError` and starts nothing; the
+    /// caller closes the stream.
+    func connect(sessionId: String) async throws {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let offer: RTCSessionDescription = try await withCheckedThrowingContinuation { cont in
             pc.offer(for: constraints) { sdp, error in
@@ -161,7 +152,6 @@ final class Stream: NSObject {
         try await MainActor.run {
             // Closed meanwhile (`close` runs on the main thread): nothing may start after it.
             guard !self.closed else { throw CancellationError() }
-            self.startPump()
             self.startStats()
         }
     }
@@ -195,6 +185,7 @@ final class Stream: NSObject {
         }
         let video = inbound("video")
         let audio = inbound("audio")
+        let playout = all.first { $0.type == "media-playout" }?.values ?? [:]
         // The transport's selected pair, as the web's `selectedPair`; else the nominated one
         // that succeeded.
         let selectedId = all.first { $0.type == "transport" && $0.values["selectedCandidatePairId"] != nil }?
@@ -210,7 +201,7 @@ final class Stream: NSObject {
                                      relayProtocol: values["relayProtocol"] as? String)
         }
         func num(_ values: [String: NSObject], _ key: String) -> Double? { (values[key] as? NSNumber)?.doubleValue }
-        return StatsReading(
+        var reading = StatsReading(
             at: report.timestamp_us / 1_000_000,
             bytesReceived: num(video, "bytesReceived") ?? 0,
             jitterBufferDelay: num(video, "jitterBufferDelay") ?? 0,
@@ -227,56 +218,17 @@ final class Stream: NSObject {
             hasVideo: !video.isEmpty,
             local: candidate("localCandidateId"),
             remote: candidate("remoteCandidateId"))
-    }
-
-    /// Sends the controller state every 4 ms when it changes and at least every 100 ms.
-    private func startPump() {
-        let timer = DispatchSource.makeTimerSource(queue: inputQueue)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(4))
-        timer.setEventHandler { [weak self] in self?.pump() }
-        timer.resume()
-        self.timer = timer
-    }
-
-    private func pump() {
-        let reading = controller.read()
-        if reading.menu && !menuHeld { DispatchQueue.main.async { self.onMenu?() } }
-        menuHeld = reading.menu
-        guard channel.readyState == .open else { return }
-        // Every player from 1 to the highest in use; a menu shows the game nothing pressed, and
-        // pauses it (as SovEmu.Android's and the web's): no frames run until it closes.
-        portCount = max(portCount, reading.ports.count)
-        let pads = reading.ports + [UInt16](repeating: 0, count: portCount - reading.ports.count)
-        let sticks = reading.analog + [WireProtocol.Analog](repeating: .centred, count: portCount - reading.analog.count)
-        let released = suspended || inactive
-        let buttons = released ? pads.map { _ in 0 } : pads
-        let hotkeys: UInt8 = suspended ? 4 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
-        let now = Date()
-        // Sticks: on change, and as a heartbeat while off-centre.
-        let analog = released ? sticks.map { _ in .centred } : sticks
-        let offCentre = analog.contains { $0 != .centred }
-        if analog != sentAnalog || (offCentre && now.timeIntervalSince(lastAnalogSend) > 0.1) {
-            analogSeq &+= 1
-            send(WireProtocol.encodeAnalog(seq: analogSeq, ports: analog))
-            sentAnalog = analog
-            lastAnalogSend = now
-        }
-        guard buttons != sent || hotkeys != sentHotkeys || now.timeIntervalSince(lastSend) > 0.1 else { return }
-        seq &+= 1
-        send(WireProtocol.encodeInput(seq: seq, clientTimeMs: now32(), ports: buttons))
-        if hotkeys != sentHotkeys || hotkeys != 0 {
-            send(WireProtocol.encodeHotkeys(fastForward: hotkeys & 1 != 0, rewind: hotkeys & 2 != 0, pause: hotkeys & 4 != 0))
-        }
-        sent = buttons
-        sentHotkeys = hotkeys
-        lastSend = now
+        reading.audioJitterBufferDelay = num(audio, "jitterBufferDelay") ?? 0
+        reading.audioJitterBufferTargetDelay = num(audio, "jitterBufferTargetDelay") ?? 0
+        reading.audioJitterBufferEmittedCount = num(audio, "jitterBufferEmittedCount") ?? 0
+        reading.audioPlayoutDelay = num(playout, "totalPlayoutDelay") ?? 0
+        reading.audioPlayoutSamples = num(playout, "totalSamplesCount") ?? 0
+        return reading
     }
 
     private func send(_ data: Data) {
         channel.sendData(RTCDataBuffer(data: data, isBinary: true))
     }
-
-    private func now32() -> UInt32 { Self.now32() }
 
     /// The app's 32-bit millisecond clock, the one `client_time_ms` carries.
     static func now32() -> UInt32 { UInt32(truncatingIfNeeded: Int64(ProcessInfo.processInfo.systemUptime * 1000)) }
@@ -294,12 +246,12 @@ final class Stream: NSObject {
         frameLatency.ackArrived(clientTimeMs: Int64(ack.clientTimeMs), nowMs: now)
     }
 
-    /// On the main thread.
+    /// On the main thread; once is enough, more is harmless.
     func close() {
+        guard !closed else { return }
         closed = true
         gathered.fire()
         statsTimer?.invalidate()
-        timer?.cancel()
         channel?.close()
         pc?.close()
     }

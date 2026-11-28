@@ -50,6 +50,33 @@ struct ProtocolTests {
         #expect(second.decoder == "VideoToolbox")
     }
 
+    /// SovEmu.Android's "the audio's delays are per sample played between two readings": sound's
+    /// delay is what a change to the audio path (the jitter buffer's cap) is judged by.
+    @Test func theAudiosDelaysArePerSamplePlayedBetweenTwoReadings() throws {
+        var sampler = StatsSampler()
+        var first = StatsReading(at: 1)
+        (first.audioJitterBufferDelay, first.audioJitterBufferTargetDelay, first.audioJitterBufferEmittedCount) = (100, 80, 2_000)
+        (first.audioPlayoutDelay, first.audioPlayoutSamples) = (50, 1_000)
+        let none = sampler.sample(first)
+        #expect(none.audioBufferMs == nil)
+        #expect(none.rows().first { $0.label == "Audio delay" }?.value == "–")
+        // A second later 48000 more samples were played, having waited 60 ms each in the
+        // buffer (aiming for 40 ms) and 25 ms in the output.
+        var second = first
+        second.at = 2
+        (second.audioJitterBufferDelay, second.audioJitterBufferTargetDelay) = (100 + 48_000 * 0.060, 80 + 48_000 * 0.040)
+        second.audioJitterBufferEmittedCount = 50_000
+        (second.audioPlayoutDelay, second.audioPlayoutSamples) = (50 + 48_000 * 0.025, 49_000)
+        let stats = sampler.sample(second)
+        #expect(abs(try #require(stats.audioBufferMs) - 60) < 0.001)
+        #expect(abs(try #require(stats.audioTargetMs) - 40) < 0.001)
+        #expect(abs(try #require(stats.audioPlayoutMs) - 25) < 0.001)
+        // The overlay shows the wait and what it is aiming for.
+        #expect(stats.rows().first { $0.label == "Audio delay" }?.value == "60 ms · target 40")
+        // The worker is not sent them.
+        #expect(!String(decoding: WireProtocol.encodeStats(stats), as: UTF8.self).contains("audio"))
+    }
+
     @Test func duplicatedPacketsNeverMakeTheLossNegative() {
         // WebRTC counts a duplicate as one fewer lost: video and audio are each clamped before
         // they are added, as the web's stats, so audio's real loss is not hidden by video's

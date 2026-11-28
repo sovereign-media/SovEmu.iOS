@@ -36,6 +36,12 @@ extension WireProtocol {
         /// How this client reaches the worker (`LinkLabels.clientPath`): `direct`, or through the
         /// relay over `relay-udp`, `relay-tcp` or `relay-tls`.
         public var path: String?
+        /// How long sound waits in the audio jitter buffer, the wait it is aiming for, and how
+        /// long it then takes to leave the audio output (where WebRTC says). The overlay's only,
+        /// as on SovEmu.Android: the worker is not sent them.
+        public var audioBufferMs: Double?
+        public var audioTargetMs: Double?
+        public var audioPlayoutMs: Double?
 
         public init(client: String? = nil, estimateMs: Double? = nil, inputToFrameMs: Int64? = nil,
                     inputRttP50Ms: Int64? = nil, inputRttP95Ms: Int64? = nil, netRttMs: Double? = nil,
@@ -142,6 +148,15 @@ public struct StatsReading: Equatable, Sendable {
     public var framesDropped: Int?
     public var networkRttMs: Double?
     public var decoder: String?
+    /// The audio's jitter buffer (`jitterBufferDelay`, `jitterBufferTargetDelay` and
+    /// `jitterBufferEmittedCount` of the inbound audio): seconds summed over every sample played.
+    public var audioJitterBufferDelay: Double = 0
+    public var audioJitterBufferTargetDelay: Double = 0
+    public var audioJitterBufferEmittedCount: Double = 0
+    /// The audio output's own delay (`media-playout`: `totalPlayoutDelay` over
+    /// `totalSamplesCount`), where the platform reports it.
+    public var audioPlayoutDelay: Double = 0
+    public var audioPlayoutSamples: Double = 0
     /// There is an inbound video stream to read: false before the first frame, while the worker
     /// checks the connection and sends none.
     public var hasVideo: Bool
@@ -202,7 +217,7 @@ public struct StatsSampler: Sendable {
         // input reaches the core and the frame comes back), plus half a frame of alignment, ~2 ms
         // encode, the jitter buffer, decode and half a display refresh at 60 Hz.
         let estimate = p50.map { Double($0) + 8 + 2 + (jitter ?? 0) + (decode ?? 0) + 8 }
-        return WireProtocol.Stats(
+        var stats = WireProtocol.Stats(
             client: client,
             estimateMs: estimate,
             inputToFrameMs: inputToFrameMs,
@@ -219,6 +234,10 @@ public struct StatsSampler: Sendable {
             framesDropped: now.framesDropped,
             decoder: now.decoder,
             path: path)
+        stats.audioBufferMs = perFrame(\.audioJitterBufferDelay, \.audioJitterBufferEmittedCount)
+        stats.audioTargetMs = perFrame(\.audioJitterBufferTargetDelay, \.audioJitterBufferEmittedCount)
+        stats.audioPlayoutMs = perFrame(\.audioPlayoutDelay, \.audioPlayoutSamples)
+        return stats
     }
 }
 
@@ -229,6 +248,7 @@ extension WireProtocol.Stats {
             guard let x, x.isFinite else { return "–" }
             return String(format: "%.\(digits)f ms", locale: Locale(identifier: "en_US_POSIX"), x)
         }
+        func whole(_ x: Double) -> String { String(Int(x.rounded())) }
         let rtt = inputRttP50Ms.map { "\($0) ms · p95 \(inputRttP95Ms.map(String.init) ?? "–")" } ?? "–"
         let video = "\(width.map(String.init) ?? "?")×\(height.map(String.init) ?? "?") @ \(fps.map { String(Int($0.rounded())) } ?? "–") fps"
         return [
@@ -237,6 +257,7 @@ extension WireProtocol.Stats {
             ("Input round trip", rtt),
             ("Network RTT", ms(netRttMs, 1)),
             ("Jitter buffer", ms(jitterMs, 1)),
+            ("Audio delay", audioBufferMs.map { "\(whole($0)) ms" + (audioTargetMs.map { " · target \(whole($0))" } ?? "") } ?? "–"),
             ("Decode", ms(decodeMs, 1)),
             ("Video", video),
             ("Bitrate", kbps.map { "\(Int($0.rounded())) kbps" } ?? "–"),
