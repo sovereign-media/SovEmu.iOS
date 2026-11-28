@@ -3,14 +3,23 @@ import SovEmuKit
 import Synchronization
 import WebRTC
 
+/// What the stream saw that is worth knowing on a device, as `inputTrace`: on the console of a
+/// debug build only.
+func streamTrace(_ line: @autoclosure () -> String) {
+    #if DEBUG
+    print(String(format: "[stream %.3f] ", ProcessInfo.processInfo.systemUptime) + line())
+    #endif
+}
+
 /// A connection to one game session: receive-only video and audio, plus the unordered,
 /// no-retransmit `input` DataChannel, which `InputLoop` sends on. Signalling is one POST of the
 /// complete offer (non-trickle), exactly as the web and Android clients do.
 ///
 /// Made off the main thread while the game loads (its peer connection takes a moment), then used
 /// on it. `@unchecked Sendable` for that handover: after `init`, its own state is touched on the
-/// main thread only (the callbacks, `link`, `pipeline`, `closed`), but for what WebRTC's threads
-/// reach, which is under a lock (`rtts`, `FrameTap`, `FrameLatency`) or a Mutex (`gathered`).
+/// main thread only (the callbacks, `link`, `pipeline`, `connected`, `closed`), but for what
+/// WebRTC's threads reach, which is under a lock (`FrameTap`, `FrameLatency`) or a Mutex
+/// (`gathered`, `inputRtts`, `unknown`).
 final class Stream: NSObject, @unchecked Sendable {
     private static let factory: RTCPeerConnectionFactory = {
         RTCInitializeSSL()
@@ -39,9 +48,9 @@ final class Stream: NSObject, @unchecked Sendable {
     private(set) var channel: RTCDataChannel!
     /// ICE gathering finished, or the wait for it gave up.
     private let gathered = OneShot()
-    /// Samples the connection's stats for the worker, on the main thread.
-    private var statsTimer: Timer?
     private var sampler = StatsSampler()
+    /// The answer is in: stats may be sampled. Main thread.
+    private var connected = false
     private var closed = false
 
     /// Called on the main thread.
@@ -71,15 +80,14 @@ final class Stream: NSObject, @unchecked Sendable {
     /// The video track in the view (main thread only). Kept: an `RTCVideoTrack` removes its
     /// renderers when it is freed, and the stream's wrapper of it is not kept by anything else.
     private var videoTrack: RTCVideoTrack?
-    private let rttLock = NSLock()
-    /// The last input round trips, in ms (send, the worker applies it on a frame, its ack).
-    private var rtts: [Int64] = []
-    private static let rttWindow = 32
+    /// The last input round trips (send, the worker applies it on a frame, its ack), over the
+    /// other clients' window.
+    let inputRtts = RecentRtts()
+    /// Messages from a newer worker this app does not know.
+    let unknown = UnknownMessages()
 
     /// Frames shown so far (read once a second, to notice a picture that stops).
     var frames: Int64 { tap.frames }
-    /// The recent input round trips, in ms.
-    var inputRtts: [Int64] { rttLock.withLock { rtts } }
 
     /// Builds the peer connection, its transceivers and the input channel: any thread.
     init(api: SovEmuAPI, iceServers: [IceServer], videoView: RTCVideoRenderer, capabilities: ClientCapabilities,
@@ -152,78 +160,28 @@ final class Stream: NSObject, @unchecked Sendable {
         try await MainActor.run {
             // Closed meanwhile (`close` runs on the main thread): nothing may start after it.
             guard !self.closed else { throw CancellationError() }
-            self.startStats()
+            self.connected = true
         }
     }
 
-    /// Sends this client's view of the stream to the worker once a second from the moment the
-    /// channel opens: before any video, while the worker checks the connection, the round trip
-    /// and the path it judges the link by (#243); then, while it plays, how this device keeps up,
-    /// for the worker lowers the video bitrate for one that does not, which its estimate of the
-    /// connection cannot see.
-    private func startStats() {
-        guard !closed else { return }
-        statsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self, !self.closed, self.channel.readyState == .open else { return }
-            self.pc.statistics { report in
-                let reading = Self.reading(report)
-                DispatchQueue.main.async {
-                    guard !self.closed, self.channel.readyState == .open else { return }
-                    let stats = self.sampler.sample(reading, client: self.clientName, inputRtts: self.inputRtts,
-                                                    inputToFrameMs: self.frameLatency.medianMs())
-                    self.send(WireProtocol.encodeStats(stats))
-                    self.onStats?(stats, reading)
-                }
+    /// Sends this client's view of the stream to the worker: on the session clock's tick, once a
+    /// second, from the moment the channel opens. Before any video, while the worker checks the
+    /// connection, the round trip and the path it judges the link by (#243); then, while it
+    /// plays, how this device keeps up, for the worker lowers the video bitrate for one that does
+    /// not, which its estimate of the connection cannot see. On the main thread.
+    func sampleStats() {
+        guard connected, !closed, channel.readyState == .open else { return }
+        pc.statistics { [weak self] report in
+            let entries = report.statistics.mapValues { StatsEntry(type: $0.type, values: $0.values) }
+            let reading = StatsReading(report: entries, timestampUs: report.timestamp_us)
+            DispatchQueue.main.async {
+                guard let self, !self.closed, self.channel.readyState == .open else { return }
+                let stats = self.sampler.sample(reading, client: self.clientName, inputRtts: self.inputRtts.values(),
+                                                inputToFrameMs: self.frameLatency.medianMs())
+                self.send(WireProtocol.encodeStats(stats))
+                self.onStats?(stats, reading)
             }
         }
-    }
-
-    private static func reading(_ report: RTCStatisticsReport) -> StatsReading {
-        let all = report.statistics.values
-        func inbound(_ kind: String) -> [String: NSObject] {
-            all.first { $0.type == "inbound-rtp" && $0.values["kind"] as? String == kind }?.values ?? [:]
-        }
-        let video = inbound("video")
-        let audio = inbound("audio")
-        let playout = all.first { $0.type == "media-playout" }?.values ?? [:]
-        // The transport's selected pair, as the web's `selectedPair`; else the nominated one
-        // that succeeded.
-        let selectedId = all.first { $0.type == "transport" && $0.values["selectedCandidatePairId"] != nil }?
-            .values["selectedCandidatePairId"] as? String
-        let pair = (selectedId.flatMap { report.statistics[$0]?.values } ?? all.first {
-            $0.type == "candidate-pair" && ($0.values["nominated"] as? NSNumber)?.boolValue == true
-                && $0.values["state"] as? String == "succeeded"
-        }?.values) ?? [:]
-        func candidate(_ key: String) -> IceCandidateStats? {
-            guard let id = pair[key] as? String, let values = report.statistics[id]?.values,
-                  let type = values["candidateType"] as? String else { return nil }
-            return IceCandidateStats(candidateType: type, protocol: values["protocol"] as? String,
-                                     relayProtocol: values["relayProtocol"] as? String)
-        }
-        func num(_ values: [String: NSObject], _ key: String) -> Double? { (values[key] as? NSNumber)?.doubleValue }
-        var reading = StatsReading(
-            at: report.timestamp_us / 1_000_000,
-            bytesReceived: num(video, "bytesReceived") ?? 0,
-            jitterBufferDelay: num(video, "jitterBufferDelay") ?? 0,
-            jitterBufferEmittedCount: num(video, "jitterBufferEmittedCount") ?? 0,
-            totalDecodeTime: num(video, "totalDecodeTime") ?? 0,
-            framesDecoded: num(video, "framesDecoded") ?? 0,
-            framesPerSecond: num(video, "framesPerSecond"),
-            width: num(video, "frameWidth").map { Int($0) },
-            height: num(video, "frameHeight").map { Int($0) },
-            packetsLost: StatsReading.packetsLost(video: num(video, "packetsLost"), audio: num(audio, "packetsLost")),
-            framesDropped: num(video, "framesDropped").map { Int($0) },
-            networkRttMs: num(pair, "currentRoundTripTime").map { $0 * 1000 },
-            decoder: video["decoderImplementation"] as? String,
-            hasVideo: !video.isEmpty,
-            local: candidate("localCandidateId"),
-            remote: candidate("remoteCandidateId"))
-        reading.audioJitterBufferDelay = num(audio, "jitterBufferDelay") ?? 0
-        reading.audioJitterBufferTargetDelay = num(audio, "jitterBufferTargetDelay") ?? 0
-        reading.audioJitterBufferEmittedCount = num(audio, "jitterBufferEmittedCount") ?? 0
-        reading.audioPlayoutDelay = num(playout, "totalPlayoutDelay") ?? 0
-        reading.audioPlayoutSamples = num(playout, "totalSamplesCount") ?? 0
-        return reading
     }
 
     private func send(_ data: Data) {
@@ -237,12 +195,7 @@ final class Stream: NSObject, @unchecked Sendable {
     private func acked(_ ack: WireProtocol.Ack) {
         let now = Int64(Self.now32())
         let rtt = (now - Int64(ack.clientTimeMs)) & 0xffff_ffff
-        if rtt < FrameLatency.maxPlausibleMs {
-            rttLock.withLock {
-                rtts.append(rtt)
-                if rtts.count > Self.rttWindow { rtts.removeFirst(rtts.count - Self.rttWindow) }
-            }
-        }
+        if rtt < FrameLatency.maxPlausibleMs { inputRtts.add(rtt) }
         frameLatency.ackArrived(clientTimeMs: Int64(ack.clientTimeMs), nowMs: now)
     }
 
@@ -251,7 +204,6 @@ final class Stream: NSObject, @unchecked Sendable {
         guard !closed else { return }
         closed = true
         gathered.fire()
-        statsTimer?.invalidate()
         channel?.close()
         pc?.close()
     }
@@ -298,27 +250,37 @@ extension Stream: RTCPeerConnectionDelegate {
 extension Stream: RTCDataChannelDelegate {
     func dataChannelDidChangeState(_ dataChannel: RTCDataChannel) {}
     /// The worker sends acks (`0x81`), its pipeline (`0x82`) and its check of the connection
-    /// (`0x83`); anything else, or a message that does not decode, is ignored.
+    /// (`0x83`), each read by its first byte. A kind this app does not know (a newer worker's)
+    /// is counted, and said once; one that does not decode is ignored.
     func dataChannel(_ dataChannel: RTCDataChannel, didReceiveMessageWith buffer: RTCDataBuffer) {
         guard buffer.isBinary else { return }
-        if let ack = WireProtocol.decodeAck(buffer.data) {
+        switch WireProtocol.decodeWorkerMessage(buffer.data) {
+        case .ack(let ack):
             acked(ack)
-            return
-        }
-        if let link = WireProtocol.decodeLink(buffer.data) {
+        case .link(let link):
             DispatchQueue.main.async { if LinkLabels.supersedes(self.link, link) { self.setLink(link) } }
-            return
+        case .pipeline(let pipeline):
+            DispatchQueue.main.async { self.received(pipeline) }
+        case .unknown(let type, let version):
+            if unknown.add(type: type, version: version) {
+                streamTrace(String(format: "ignoring a message this app does not know: type 0x%02x version %d", type, version))
+            }
+        case .malformed:
+            break
         }
-        guard let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
-        DispatchQueue.main.async {
-            // The check's result comes again with the pipeline: a lost `0x83` is not missed.
-            if let link = pipeline.link, self.link != link, LinkLabels.supersedes(self.link, link) { self.setLink(link) }
-            guard pipeline != self.pipeline else { return }
-            let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
-            self.pipeline = pipeline
-            if let notice { self.onQuality?(notice) }
-            self.onPipeline?(pipeline)
-        }
+    }
+}
+
+extension Stream {
+    /// A pipeline message, on the main thread.
+    fileprivate func received(_ pipeline: WireProtocol.Pipeline) {
+        // The check's result comes again with the pipeline: a lost `0x83` is not missed.
+        if let link = pipeline.link, self.link != link, LinkLabels.supersedes(self.link, link) { setLink(link) }
+        guard pipeline != self.pipeline else { return }
+        let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
+        self.pipeline = pipeline
+        if let notice { onQuality?(notice) }
+        onPipeline?(pipeline)
     }
 }
 
