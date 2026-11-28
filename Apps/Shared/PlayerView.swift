@@ -43,10 +43,20 @@ private final class Chooser {
     var asking = false
     @ObservationIgnored private var continuation: CheckedContinuation<Start, Never>?
 
+    /// Start over, without asking, when the player leaves meanwhile: the start that waits on it
+    /// must end rather than stay suspended.
     func ask() async -> Start {
-        await withCheckedContinuation { c in
-            continuation = c
-            asking = true
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { c in
+                if Task.isCancelled {
+                    c.resume(returning: .new)
+                    return
+                }
+                continuation = c
+                asking = true
+            }
+        } onCancel: {
+            Task { @MainActor in self.choose(.new) }
         }
     }
 
@@ -583,18 +593,24 @@ struct PlayerView: View {
 
     // MARK: Starting and leaving
 
+    /// Starts the session and connects to it. Leaving at any point (the view's task cancelled)
+    /// ends it: nothing is made after that, and a stream already made is closed.
     private func begin() async {
         guard let api = model.api else { return }
-        // Started at once: the question, the mappings and the decoration come meanwhile.
+        // Started at once: the question, the mappings and the decoration come meanwhile. A save
+        // chosen before the player opened is loaded by the start itself (`slot`), as the web's;
+        // one chosen on the loading screen, once the start is under way, by `loadState`.
         let id = startId
         let gameId = game.id
-        let task = Task { try await api.startSession(gameId: gameId, startId: id) }
+        let chosenSlot: Int? = if case .fromSlot(let slot) = start { slot } else { nil }
+        let task = Task { try await api.startSession(gameId: gameId, startId: id, slot: chosenSlot) }
         starting = task
         Task { decoration = try? await api.decoration(gameId: gameId) }
         controller.analogSticks = system.needsGpu
         async let config = try? api.config()
         async let mappings = try? Mappings.fetch(system: system.id, with: api)
         async let info = try? api.controls(system: system.id)
+        var made: Stream?
         do {
             var how = start
             // Nil when not asked for: a missing list only leaves the loading screen without the
@@ -610,16 +626,20 @@ struct PlayerView: View {
             controller.mappings = await mappings ?? Mappings(system: system.id)
             controls = await info
             let started = try await task.value
-            if case .fromSlot(let slot) = how {
+            try Task.checkCancellation()
+            if case .fromSlot(let slot) = how, slot != chosenSlot {
                 do {
                     try await api.loadState(sessionId: started.id, slot: slot)
                 } catch {
                     flash("Could not load: \(error.localizedDescription)")
                 }
             }
+            let iceServers = await config?.iceServers ?? []
+            try Task.checkCancellation()
             session = started
-            let s = Stream(api: api, sessionId: started.id, iceServers: await config?.iceServers ?? [], controller: controller,
-                           videoView: video)
+            let s = Stream(api: api, sessionId: started.id, iceServers: iceServers, controller: controller,
+                           videoView: video, capabilities: DeviceCapabilities.document())
+            made = s
             s.onQuality = { showQuality($0) }
             s.onFirstFrame = { pictureShown = true }
             s.onLink = { l in
@@ -627,8 +647,9 @@ struct PlayerView: View {
                 // A check started again (the selected pair changed) does not take the bar back.
                 if l.state == WireProtocol.Link.probing { bar = max(bar, describeLink(l).fraction) }
             }
-            s.onStats = { stats, reading in
-                guard settings.stats else { return }
+            // Weak: the stream keeps this closure, and a strong `s` in it kept every stream alive.
+            s.onStats = { [weak s] stats, reading in
+                guard let s, settings.stats else { return }
                 statsRows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
                 guard reading.hasVideo else { return }
                 history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
@@ -649,6 +670,8 @@ struct PlayerView: View {
             stream = s
             try await s.connect()
         } catch is CancellationError {
+            // `leave` may have run before the stream was made, and closed nothing.
+            made?.close()
         } catch {
             self.error = "Could not start: \(error.localizedDescription)"
         }

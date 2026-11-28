@@ -9,27 +9,31 @@ extension SovEmuGraphQL {
     static let operationName: String = "SessionOffer"
     static let operationDocument: ApolloAPI.OperationDocument = .init(
       definition: .init(
-        #"mutation SessionOffer($id: ID!, $sdp: String!, $client: String) { sessionOffer(id: $id, sdp: $sdp, client: $client) }"#
+        #"mutation SessionOffer($id: ID!, $sdp: String!, $client: String, $capabilities: ClientCapabilitiesInput) { sessionOffer(id: $id, sdp: $sdp, client: $client, capabilities: $capabilities) }"#
       ))
 
     public var id: ID
     public var sdp: String
     public var client: GraphQLNullable<String>
+    public var capabilities: GraphQLNullable<ClientCapabilitiesInput>
 
     public init(
       id: ID,
       sdp: String,
-      client: GraphQLNullable<String>
+      client: GraphQLNullable<String>,
+      capabilities: GraphQLNullable<ClientCapabilitiesInput>
     ) {
       self.id = id
       self.sdp = sdp
       self.client = client
+      self.capabilities = capabilities
     }
 
     @_spi(Unsafe) public var __variables: Variables? { [
       "id": id,
       "sdp": sdp,
-      "client": client
+      "client": client,
+      "capabilities": capabilities
     ] }
 
     nonisolated struct Data: SovEmuGraphQL.SelectionSet {
@@ -41,7 +45,8 @@ extension SovEmuGraphQL {
         .field("sessionOffer", String.self, arguments: [
           "id": .variable("id"),
           "sdp": .variable("sdp"),
-          "client": .variable("client")
+          "client": .variable("client"),
+          "capabilities": .variable("capabilities")
         ]),
       ] }
       static var __fulfilledFragments: [any ApolloAPI.SelectionSet.Type] { [

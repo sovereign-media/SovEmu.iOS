@@ -313,8 +313,8 @@ mutation DeleteCheat($gameId: Int!, $cheatId: Int!) {
   deleteCheat(gameId: $gameId, cheatId: $cheatId)
 }
 
-mutation StartSession($gameId: Int!, $startId: String) {
-  startSession(gameId: $gameId, startId: $startId) {
+mutation StartSession($gameId: Int!, $startId: String, $slot: Int) {
+  startSession(gameId: $gameId, startId: $startId, slot: $slot) {
     ...SessionFields
   }
 }
@@ -330,8 +330,8 @@ query StartProgress($startId: String!) {
   }
 }
 
-mutation SessionOffer($id: ID!, $sdp: String!, $client: String) {
-  sessionOffer(id: $id, sdp: $sdp, client: $client)
+mutation SessionOffer($id: ID!, $sdp: String!, $client: String, $capabilities: ClientCapabilitiesInput) {
+  sessionOffer(id: $id, sdp: $sdp, client: $client, capabilities: $capabilities)
 }
 
 mutation StopSession($id: ID!) {
