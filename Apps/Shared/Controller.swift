@@ -46,10 +46,15 @@ final class Controller {
     }
 
     /// The game reads analog sticks (a 3D system): the left stick moves the stick, not the
-    /// D-pad. Otherwise it doubles as a D-pad, as in 2D frontends.
-    var analogSticks = false
+    /// D-pad. Otherwise it doubles as a D-pad, as in 2D frontends. Set on the main thread, read
+    /// by `read()` on the input queue: under `lock`.
+    var analogSticks: Bool {
+        get { lock.withLock { sticksAreAnalog } }
+        set { lock.withLock { sticksAreAnalog = newValue } }
+    }
 
     private let lock = NSLock()
+    private var sticksAreAnalog = false
     private var touch: UInt16 = 0
     private var players = Players<ObjectIdentifier>()
     private var keyboardPort = 0
@@ -299,6 +304,7 @@ final class Controller {
         let touch = self.touch
         let keyboardPort = self.keyboardPort
         let store = self.store
+        let analogSticks = sticksAreAnalog
         var pads: [(GCExtendedGamepad, Int, ControllerMap)] = []
         for controller in controllers {
             guard let pad = controller.extendedGamepad else { continue }

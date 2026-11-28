@@ -67,6 +67,29 @@ private final class Chooser {
     }
 }
 
+/// What the wait for a first picture is counted for: this connection, while there is none.
+private struct WaitKey: Equatable {
+    var stream: ObjectIdentifier?
+    var waiting: Bool
+}
+
+/// The system's uptime in ms: the clock reconnecting is timed on, which only moves forward.
+private func uptimeMs() -> Int64 { Int64(ProcessInfo.processInfo.systemUptime * 1000) }
+
+extension PeerState {
+    init(_ state: RTCPeerConnectionState) {
+        switch state {
+        case .new: self = .new
+        case .connecting: self = .connecting
+        case .connected: self = .connected
+        case .disconnected: self = .disconnected
+        case .failed: self = .failed
+        case .closed: self = .closed
+        @unknown default: self = .new
+        }
+    }
+}
+
 /// The in-game menu's pages beyond the main one.
 private enum MenuPage { case main, save, load, disc, cheats }
 
@@ -102,6 +125,11 @@ struct PlayerView: View {
     @State private var waitedMs: Int64 = 0
     @State private var chooser = Chooser()
     @State private var startId = newStartId()
+    /// Reads the controllers and sends their input, from the player's first moment to its last.
+    @State private var input: InputLoop?
+    /// Reconnects so far, and whether reconnecting gave up before a picture.
+    @State private var attempt = 0
+    @State private var connectionFailed = false
     @State private var starting: Task<SessionInfo, Error>?
     /// The stream has connected once: a failure after that is a lost connection.
     @State private var everConnected = false
@@ -156,7 +184,8 @@ struct PlayerView: View {
             Decorated(decoration: decoration, aspect: aspect) { VideoView(view: video) }
                 .ignoresSafeArea()
             if let screen = GameStart.screen(title: game.title, error: error, progress: progress, bar: bar, ready: session != nil,
-                                             link: link, pictureShown: pictureShown, waitedMs: waitedMs)
+                                             link: link, pictureShown: pictureShown, waitedMs: waitedMs,
+                                             attempt: attempt, connectionFailed: connectionFailed)
                 ?? (chooser.asking ? StartScreen(label: "") : nil) {
                 Splash(game: game, system: system, screen: screen, chooser: chooser,
                        background: loadingBackground(saveShot: saveShot, image: game.image, boxArt: game.cover ?? game.thumb),
@@ -237,11 +266,14 @@ struct PlayerView: View {
         .persistentSystemOverlays(.hidden)
         .task { await begin() }
         .task(id: session?.id) { await pollProgress() }
-        .task(id: stream != nil && !pictureShown && session != nil) { await countWait() }
-        .task(id: stream != nil) { await watchForStalls() }
-        .onChange(of: phase) { _, phase in stream?.inactive = phase != .active }
+        // Counted again for each connection, as the web's.
+        .task(id: WaitKey(stream: stream.map(ObjectIdentifier.init), waiting: !pictureShown && session != nil)) {
+            await countWait()
+        }
+        .task(id: stream.map(ObjectIdentifier.init)) { await watchForStalls() }
+        .onChange(of: phase) { _, phase in input?.inactive = phase != .active }
         .onChange(of: menuOpen) { _, open in
-            stream?.suspended = open
+            input?.suspended = open
             if !open { menuPage = .main }
         }
         .onChange(of: menuPage) { _, page in
@@ -593,10 +625,23 @@ struct PlayerView: View {
 
     // MARK: Starting and leaving
 
-    /// Starts the session and connects to it. Leaving at any point (the view's task cancelled)
-    /// ends it: nothing is made after that, and a stream already made is closed.
+    /// Starts the session and keeps it connected. Leaving at any point (the view's task
+    /// cancelled) ends it: nothing is made after that, and a stream already made is closed.
     private func begin() async {
         guard let api = model.api else { return }
+        // The controllers are read from now: Select+Start or Home opens the menu while the game
+        // loads, as the ☰ button and the remote's Back do.
+        let loop = InputLoop(controller: controller)
+        loop.onMenu = {
+            inputTrace("input: menu asked, menu \(menuOpen ? "open" : "closed")")
+            // The press that just closed the menu (Escape, Home) must not reopen it.
+            if !menuOpen && Date().timeIntervalSince(gameMenu?.closedAt ?? .distantPast) > 0.3 { menuOpen = true }
+        }
+        loop.suspended = menuOpen
+        loop.inactive = phase != .active
+        controller.analogSticks = system.needsGpu
+        loop.start()
+        input = loop
         // Started at once: the question, the mappings and the decoration come meanwhile. A save
         // chosen before the player opened is loaded by the start itself (`slot`), as the web's;
         // one chosen on the loading screen, once the start is under way, by `loadState`.
@@ -606,11 +651,12 @@ struct PlayerView: View {
         let task = Task { try await api.startSession(gameId: gameId, startId: id, slot: chosenSlot) }
         starting = task
         Task { decoration = try? await api.decoration(gameId: gameId) }
-        controller.analogSticks = system.needsGpu
         async let config = try? api.config()
         async let mappings = try? Mappings.fetch(system: system.id, with: api)
         async let info = try? api.controls(system: system.id)
-        var made: Stream?
+        // The peer connection is built while the game loads, off the main thread.
+        let build = streamBuilder(api: api, iceServers: await config?.iceServers ?? [])
+        var first: Task<Stream, Never>? = build()
         do {
             var how = start
             // Nil when not asked for: a missing list only leaves the loading screen without the
@@ -634,46 +680,127 @@ struct PlayerView: View {
                     flash("Could not load: \(error.localizedDescription)")
                 }
             }
-            let iceServers = await config?.iceServers ?? []
-            try Task.checkCancellation()
             session = started
-            let s = Stream(api: api, sessionId: started.id, iceServers: iceServers, controller: controller,
-                           videoView: video, capabilities: DeviceCapabilities.document())
-            made = s
-            s.onQuality = { showQuality($0) }
-            s.onFirstFrame = { pictureShown = true }
-            s.onLink = { l in
-                link = l
-                // A check started again (the selected pair changed) does not take the bar back.
-                if l.state == WireProtocol.Link.probing { bar = max(bar, describeLink(l).fraction) }
-            }
-            // Weak: the stream keeps this closure, and a strong `s` in it kept every stream alive.
-            s.onStats = { [weak s] stats, reading in
-                guard let s, settings.stats else { return }
-                statsRows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
-                guard reading.hasVideo else { return }
-                history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
-            }
-            s.onState = { state in
-                if state == .failed { error = "Connection failed" }
-                if state == .connected { everConnected = true }
-                if state == .failed || state == .disconnected {
-                    let kind: ClientEventKind = everConnected ? .connectionLost : .connectionFailed
-                    ClientEvents.report(kind, "WebRTC \(state == .failed ? "failed" : "disconnected")", sessionId: started.id)
-                }
-            }
-            s.onMenu = {
-                inputTrace("stream: menu asked, menu \(menuOpen ? "open" : "closed")")
-                // The press that just closed the menu (Escape, Home) must not reopen it.
-                if !menuOpen && Date().timeIntervalSince(gameMenu?.closedAt ?? .distantPast) > 0.3 { menuOpen = true }
-            }
-            stream = s
-            try await s.connect()
+            let made = first
+            first = nil
+            await keepConnected(sessionId: started.id, first: made, build: build)
         } catch is CancellationError {
-            // `leave` may have run before the stream was made, and closed nothing.
-            made?.close()
         } catch {
             self.error = "Could not start: \(error.localizedDescription)"
+        }
+        // Left (or the start failed) before the first stream was used: it is not wanted.
+        if let first { await first.value.close() }
+    }
+
+    /// Makes a stream, on another thread, for the session to come: what it needs from the main
+    /// thread is read here.
+    private func streamBuilder(api: SovEmuAPI, iceServers: [IceServer]) -> () -> Task<Stream, Never> {
+        let capabilities = DeviceCapabilities.document()
+        let clientName = ClientEvents.clientName
+        let view = video
+        return {
+            Task.detached {
+                Stream(api: api, iceServers: iceServers, videoView: view, capabilities: capabilities, clientName: clientName)
+            }
+        }
+    }
+
+    /// What happens to a connection, for `ReconnectWatch`.
+    private enum LinkEvent {
+        case state(PeerState)
+        case offerFailed
+        case tick
+    }
+
+    /// Connects to the session and keeps it connected: a connection that fails, stays
+    /// disconnected for 5 s or never connects within 15 s is replaced, up to 3 times
+    /// (`ReconnectWatch`, as the web's and SovEmu.Android's), then the game says it could not
+    /// connect. Returns once it has given up, or when cancelled (the player left), with every
+    /// stream it used closed.
+    private func keepConnected(sessionId: String, first: Task<Stream, Never>?, build: () -> Task<Stream, Never>) async {
+        var watch = ReconnectWatch(nowMs: uptimeMs())
+        var pending = first ?? build()
+        while true {
+            let s = await pending.value
+            guard !Task.isCancelled else {
+                s.close()
+                return
+            }
+            let (events, sink) = AsyncStream.makeStream(of: LinkEvent.self)
+            wire(s, sessionId: sessionId, events: sink)
+            link = nil
+            stream = s
+            input?.attach(s.channel)
+            let connecting = Task {
+                do {
+                    try await s.connect(sessionId: sessionId)
+                } catch is CancellationError {
+                } catch {
+                    ClientEvents.report(everConnected ? .connectionLost : .connectionFailed,
+                                        "offer: \(error.localizedDescription)", sessionId: sessionId)
+                    sink.yield(.offerFailed)
+                }
+            }
+            let ticker = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(1)) // Cancelled with the connection: it ends.
+                    sink.yield(.tick)
+                }
+            }
+            var verdict = ReconnectWatch.Verdict.keep
+            // Ends when the player leaves (the task cancelled), or once the watch says.
+            for await event in events {
+                switch event {
+                case .state(let state): verdict = watch.state(state, nowMs: uptimeMs())
+                case .offerFailed: verdict = watch.offerFailed(nowMs: uptimeMs())
+                case .tick: verdict = watch.tick(nowMs: uptimeMs())
+                }
+                if verdict != .keep { break }
+            }
+            ticker.cancel()
+            connecting.cancel()
+            sink.finish()
+            input?.attach(nil)
+            s.close()
+            guard !Task.isCancelled else { return }
+            if case .reconnect(let n) = verdict {
+                attempt = n
+                if pictureShown { flash("Reconnecting…") }
+                pending = build()
+                continue
+            }
+            if pictureShown {
+                error = "Lost the connection to the game"
+            } else {
+                connectionFailed = true
+            }
+            return
+        }
+    }
+
+    /// The stream's callbacks, on the main thread; its states go to `events`.
+    private func wire(_ s: Stream, sessionId: String, events: AsyncStream<LinkEvent>.Continuation) {
+        s.onQuality = { showQuality($0) }
+        s.onFirstFrame = { pictureShown = true }
+        s.onLink = { l in
+            link = l
+            // A check started again (the selected pair changed) does not take the bar back.
+            if l.state == WireProtocol.Link.probing { bar = max(bar, describeLink(l).fraction) }
+        }
+        // Weak: the stream keeps this closure, and a strong `s` in it kept every stream alive.
+        s.onStats = { [weak s] stats, reading in
+            guard let s, settings.stats else { return }
+            statsRows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
+            guard reading.hasVideo else { return }
+            history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
+        }
+        s.onState = { state in
+            if state == .connected { everConnected = true }
+            if state == .failed || state == .disconnected {
+                let kind: ClientEventKind = everConnected ? .connectionLost : .connectionFailed
+                ClientEvents.report(kind, "WebRTC \(state == .failed ? "failed" : "disconnected")", sessionId: sessionId)
+            }
+            events.yield(.state(PeerState(state)))
         }
     }
 
@@ -710,6 +837,7 @@ struct PlayerView: View {
     /// How long the ready session has waited for its first picture.
     private func countWait() async {
         guard session != nil, !pictureShown else { return }
+        waitedMs = 0
         let since = Date()
         while !Task.isCancelled, !pictureShown {
             waitedMs = Int64(Date().timeIntervalSince(since) * 1000)
@@ -739,6 +867,7 @@ struct PlayerView: View {
     /// (if it does), so its worker writes the saves and exits.
     private func leave() {
         Controller.claimHome(false)
+        input?.stop()
         stream?.close()
         controller.clear()
         guard let api = model.api, let starting else { return }
