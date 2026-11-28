@@ -67,6 +67,33 @@ private final class Chooser {
     }
 }
 
+/// What the loading screen follows that changes while the game starts (the server's progress
+/// four times a second, the bar, the check of the connection, the wait for a picture, the
+/// reconnects): its own model, so only the loading screen redraws for it.
+@MainActor
+@Observable
+private final class LoadingState {
+    /// The server's word on how far the start has got (nil until it has said), and the bar.
+    var progress: StartStatus?
+    var bar = 0.0
+    /// The worker's check of the connection before the stream starts (`0x83`), as it last said.
+    var link: WireProtocol.Link?
+    /// How long this connection has waited for its first picture.
+    var waitedMs: Int64 = 0
+    /// Reconnects so far, and whether reconnecting gave up before a picture.
+    var attempt = 0
+    var connectionFailed = false
+}
+
+/// The stats overlay's rows (nil while it is off or has no sample yet) and its graph, new every
+/// second: its own model, so only the overlay redraws for them.
+@MainActor
+@Observable
+private final class StatsState {
+    var rows: [(label: String, value: String)]?
+    var history = LatencyHistory()
+}
+
 /// What the wait for a first picture is counted for: this connection, while there is none.
 private struct WaitKey: Equatable {
     var stream: ObjectIdentifier?
@@ -113,23 +140,16 @@ struct PlayerView: View {
     @State private var stream: Stream?
     /// A failure to start, or a lost connection, shown in place of the game.
     @State private var error: String?
-    /// The server's word on how far the start has got (nil until it has said), and the bar.
-    @State private var progress: StartStatus?
-    @State private var bar = 0.0
+    /// What the loading screen follows, which changes several times a second: read only by
+    /// `LoadingLayer`, so a change redraws the loading screen and not the whole player.
+    @State private var loading = LoadingState()
     @State private var pictureShown = false
-    /// The worker's check of the connection before the stream starts (`0x83`), as it last said.
-    @State private var link: WireProtocol.Link?
     /// The screenshot of the save being continued: the loading screen's background.
     @State private var saveShot: String?
-    /// How long the ready session has waited for its first picture.
-    @State private var waitedMs: Int64 = 0
     @State private var chooser = Chooser()
     @State private var startId = newStartId()
     /// Reads the controllers and sends their input, from the player's first moment to its last.
     @State private var input: InputLoop?
-    /// Reconnects so far, and whether reconnecting gave up before a picture.
-    @State private var attempt = 0
-    @State private var connectionFailed = false
     @State private var starting: Task<SessionInfo, Error>?
     /// The stream has connected once: a failure after that is a lost connection.
     @State private var everConnected = false
@@ -149,8 +169,7 @@ struct PlayerView: View {
     /// The stream's quality changed: the notice at the top of the screen, for a moment.
     @State private var quality: WireProtocol.QualityNotice?
     /// The stats overlay's rows (nil while it is off or has no sample yet) and its graph.
-    @State private var statsRows: [(label: String, value: String)]?
-    @State private var history = LatencyHistory()
+    @State private var stats = StatsState()
     @State private var decoration: GameDecoration?
     @State private var controller = Controller()
     @State private var gameMenu: GameMenu?
@@ -183,24 +202,12 @@ struct PlayerView: View {
             Color.black.ignoresSafeArea()
             Decorated(decoration: decoration, aspect: aspect) { VideoView(view: video) }
                 .ignoresSafeArea()
-            if let screen = GameStart.screen(title: game.title, error: error, progress: progress, bar: bar, ready: session != nil,
-                                             link: link, pictureShown: pictureShown, waitedMs: waitedMs,
-                                             attempt: attempt, connectionFailed: connectionFailed)
-                ?? (chooser.asking ? StartScreen(label: "") : nil) {
-                Splash(game: game, system: system, screen: screen, chooser: chooser,
-                       background: loadingBackground(saveShot: saveShot, image: game.image, boxArt: game.cover ?? game.thumb),
-                       status: session.map { loadingStatus(core: $0.core, width: $0.width, height: $0.height, fps: $0.fps) } ?? "",
-                       network: LinkLabels.networkLabel(link?.path ?? ""))
-            }
+            LoadingLayer(loading: loading, game: game, system: system, chooser: chooser, error: error,
+                         session: session, pictureShown: pictureShown, saveShot: saveShot)
             #if os(iOS)
             if showTouch && !menuOpen && session != nil && error == nil { TouchControls(controller: controller) }
             #endif
-            if let statsRows {
-                StatsOverlay(rows: statsRows, history: history)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(sized(16, tv: 12))
-                    .allowsHitTesting(false)
-            }
+            StatsLayer(stats: stats)
             VStack {
                 // A TV opens the menu from the remote (Back or Play/Pause) or a controller's Home.
                 #if os(iOS)
@@ -283,8 +290,8 @@ struct PlayerView: View {
         }
         .onChange(of: gameMenu?.focus) { _, _ in cheatSide = false }
         .onChange(of: settings.stats) { _, on in
-            history.clear()
-            if !on { statsRows = nil }
+            stats.history.clear()
+            if !on { stats.rows = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in
             showTouch = false
@@ -728,7 +735,7 @@ struct PlayerView: View {
             }
             let (events, sink) = AsyncStream.makeStream(of: LinkEvent.self)
             wire(s, sessionId: sessionId, events: sink)
-            link = nil
+            loading.link = nil
             stream = s
             input?.attach(s.channel)
             let connecting = Task {
@@ -764,7 +771,7 @@ struct PlayerView: View {
             s.close()
             guard !Task.isCancelled else { return }
             if case .reconnect(let n) = verdict {
-                attempt = n
+                loading.attempt = n
                 if pictureShown { flash("Reconnecting…") }
                 pending = build()
                 continue
@@ -772,7 +779,7 @@ struct PlayerView: View {
             if pictureShown {
                 error = "Lost the connection to the game"
             } else {
-                connectionFailed = true
+                loading.connectionFailed = true
             }
             return
         }
@@ -783,16 +790,16 @@ struct PlayerView: View {
         s.onQuality = { showQuality($0) }
         s.onFirstFrame = { pictureShown = true }
         s.onLink = { l in
-            link = l
+            loading.link = l
             // A check started again (the selected pair changed) does not take the bar back.
-            if l.state == WireProtocol.Link.probing { bar = max(bar, describeLink(l).fraction) }
+            if l.state == WireProtocol.Link.probing { loading.bar = max(loading.bar, describeLink(l).fraction) }
         }
         // Weak: the stream keeps this closure, and a strong `s` in it kept every stream alive.
         s.onStats = { [weak s] stats, reading in
             guard let s, settings.stats else { return }
-            statsRows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
+            self.stats.rows = WireProtocol.overlayRows(stats, reading: reading, pipeline: s.pipeline, link: s.link)
             guard reading.hasVideo else { return }
-            history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
+            self.stats.history.add(measured: stats.inputToFrameMs.map(Double.init), estimated: stats.estimateMs)
         }
         s.onState = { state in
             if state == .connected { everConnected = true }
@@ -827,8 +834,8 @@ struct PlayerView: View {
         var forward = ForwardOnly()
         while !Task.isCancelled, session == nil, error == nil {
             if let status = try? await api.startProgress(startId: startId) {
-                progress = status
-                bar = forward.next(describeStart(status).fraction)
+                loading.progress = status
+                loading.bar = forward.next(describeStart(status).fraction)
             }
             try? await Task.sleep(for: .milliseconds(250))
         }
@@ -837,10 +844,10 @@ struct PlayerView: View {
     /// How long the ready session has waited for its first picture.
     private func countWait() async {
         guard session != nil, !pictureShown else { return }
-        waitedMs = 0
+        loading.waitedMs = 0
         let since = Date()
         while !Task.isCancelled, !pictureShown {
-            waitedMs = Int64(Date().timeIntervalSince(since) * 1000)
+            loading.waitedMs = Int64(Date().timeIntervalSince(since) * 1000)
             try? await Task.sleep(for: .seconds(1))
         }
     }
@@ -932,6 +939,45 @@ struct Decorated<Picture: View>: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+}
+
+/// The loading screen, when there is one to show: it alone reads `LoadingState`.
+private struct LoadingLayer: View {
+    let loading: LoadingState
+    let game: Game
+    let system: SystemSummary
+    let chooser: Chooser
+    let error: String?
+    let session: SessionInfo?
+    let pictureShown: Bool
+    let saveShot: String?
+
+    var body: some View {
+        if let screen = GameStart.screen(title: game.title, error: error, progress: loading.progress, bar: loading.bar,
+                                         ready: session != nil, link: loading.link, pictureShown: pictureShown,
+                                         waitedMs: loading.waitedMs, attempt: loading.attempt,
+                                         connectionFailed: loading.connectionFailed)
+            ?? (chooser.asking ? StartScreen(label: "") : nil) {
+            Splash(game: game, system: system, screen: screen, chooser: chooser,
+                   background: loadingBackground(saveShot: saveShot, image: game.image, boxArt: game.cover ?? game.thumb),
+                   status: session.map { loadingStatus(core: $0.core, width: $0.width, height: $0.height, fps: $0.fps) } ?? "",
+                   network: LinkLabels.networkLabel(loading.link?.path ?? ""))
+        }
+    }
+}
+
+/// The stats overlay, while there are rows: it alone reads `StatsState`.
+private struct StatsLayer: View {
+    let stats: StatsState
+
+    var body: some View {
+        if let rows = stats.rows {
+            StatsOverlay(rows: rows, history: stats.history)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(sized(16, tv: 12))
+                .allowsHitTesting(false)
         }
     }
 }
@@ -1157,69 +1203,12 @@ private struct LatencyGraph: View {
 }
 
 #if os(iOS)
-/// An on-screen pad: D-pad bottom left, face buttons bottom right, Select/Start centre, L/R top.
-struct TouchControls: View {
+/// The on-screen pad, drawn and touched by `TouchControlsView`.
+struct TouchControls: UIViewRepresentable {
     let controller: Controller
 
-    var body: some View {
-        VStack {
-            HStack {
-                pad("L", .l, width: 88, height: 40)
-                Spacer()
-                pad("R", .r, width: 88, height: 40)
-            }
-            Spacer()
-            HStack(alignment: .bottom) {
-                VStack(spacing: 0) {
-                    pad("▲", .up)
-                    HStack(spacing: 56) { pad("◀", .left); pad("▶", .right) }
-                    pad("▼", .down)
-                }
-                Spacer()
-                HStack(spacing: 16) { pad("Select", .select, width: 72, height: 32); pad("Start", .start, width: 72, height: 32) }
-                Spacer()
-                VStack(spacing: 0) {
-                    pad("X", .x, round: true)
-                    HStack(spacing: 56) { pad("Y", .y, round: true); pad("A", .a, round: true) }
-                    pad("B", .b, round: true)
-                }
-            }
-        }
-        .padding(24)
-    }
-
-    private func pad(_ label: String, _ button: RetroButton, round: Bool = false, width: CGFloat = 56, height: CGFloat = 56) -> some View {
-        PadButton(label: label, round: round, width: width, height: height) { controller.setTouch(button, $0) }
-    }
-}
-
-private struct PadButton: View {
-    let label: String
-    let round: Bool
-    let width: CGFloat
-    let height: CGFloat
-    let onPress: (Bool) -> Void
-    @State private var pressed = false
-
-    var body: some View {
-        Text(label)
-            .font(.system(size: 14, weight: .bold))
-            .foregroundStyle(.white.opacity(0.9))
-            .frame(width: width, height: height)
-            .background(.white.opacity(pressed ? 0.45 : 0.18), in: RoundedRectangle(cornerRadius: round ? height / 2 : 10))
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        if !pressed {
-                            pressed = true
-                            onPress(true)
-                        }
-                    }
-                    .onEnded { _ in
-                        pressed = false
-                        onPress(false)
-                    },
-            )
-    }
+    func makeUIView(context: Context) -> TouchControlsView { TouchControlsView(controller: controller) }
+    func updateUIView(_ view: TouchControlsView, context: Context) {}
+    static func dismantleUIView(_ view: TouchControlsView, coordinator: ()) { view.releaseAll() }
 }
 #endif

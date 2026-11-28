@@ -183,8 +183,8 @@ public enum KeyNames {
     /// The `KeyboardEvent.code` for a HID keyboard usage (`GCKeyCode.rawValue`), if it has one.
     public static func code(forUsage usage: Int) -> String? { usages[usage] }
 
-    /// Every named key's usage, for polling a keyboard.
-    public static var allUsages: [Int] { usages.keys.sorted() }
+    /// Every named key's usage, for polling a keyboard: stored, as it is read on every tick.
+    public static let allUsages: [Int] = usages.keys.sorted()
 
     /// Whether a key may be bound (not a hotkey).
     public static func bindable(_ code: String) -> Bool { !reserved.contains(code) }
