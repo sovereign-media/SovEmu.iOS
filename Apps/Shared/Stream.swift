@@ -28,6 +28,8 @@ final class Stream: NSObject {
     private var channel: RTCDataChannel!
     private var gathered: CheckedContinuation<Void, Never>?
     private var timer: DispatchSourceTimer?
+    /// Where the input pump runs, every 4 ms.
+    private let inputQueue = DispatchQueue(label: "sovemu.input")
     /// Samples the connection's stats for the worker, on the main thread.
     private var statsTimer: Timer?
     private var sampler = StatsSampler()
@@ -45,6 +47,16 @@ final class Stream: NSObject {
 
     /// While true (a menu is open) the game sees nothing pressed.
     var suspended = false
+    /// While true (the app is not in the foreground: Home or TV pressed, Control Center, a
+    /// system alert) the game sees nothing pressed. Going out, the release is sent at once: an
+    /// app suspended with a button held went silent, and the worker let go only after its
+    /// half-second lapse, the button held all that time (SovEmu.iOS#43). As SovEmu.Android's
+    /// `Controller.lostFocus`, it does not pause: the in-game menu does that.
+    var inactive = false {
+        didSet {
+            if inactive && !oldValue { inputQueue.async { [weak self] in self?.pump() } }
+        }
+    }
     var onState: ((RTCPeerConnectionState) -> Void)?
     var onMenu: (() -> Void)?
     /// How the worker makes this stream (`0x82`), the latest the worker sent; nil until it
@@ -204,7 +216,7 @@ final class Stream: NSObject {
 
     /// Sends the controller state every 4 ms when it changes and at least every 100 ms.
     private func startPump() {
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "sovemu.input"))
+        let timer = DispatchSource.makeTimerSource(queue: inputQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(4))
         timer.setEventHandler { [weak self] in self?.pump() }
         timer.resume()
@@ -221,11 +233,12 @@ final class Stream: NSObject {
         portCount = max(portCount, reading.ports.count)
         let pads = reading.ports + [UInt16](repeating: 0, count: portCount - reading.ports.count)
         let sticks = reading.analog + [WireProtocol.Analog](repeating: .centred, count: portCount - reading.analog.count)
-        let buttons = suspended ? pads.map { _ in 0 } : pads
+        let released = suspended || inactive
+        let buttons = released ? pads.map { _ in 0 } : pads
         let hotkeys: UInt8 = suspended ? 4 : (reading.fastForward ? 1 : 0) | (reading.rewind ? 2 : 0)
         let now = Date()
         // Sticks: on change, and as a heartbeat while off-centre.
-        let analog = suspended ? sticks.map { _ in .centred } : sticks
+        let analog = released ? sticks.map { _ in .centred } : sticks
         let offCentre = analog.contains { $0 != .centred }
         if analog != sentAnalog || (offCentre && now.timeIntervalSince(lastAnalogSend) > 0.1) {
             analogSeq &+= 1

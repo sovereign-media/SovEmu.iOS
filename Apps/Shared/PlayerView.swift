@@ -70,6 +70,7 @@ private enum MenuPage { case main, save, load, disc, cheats }
 struct PlayerView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppSettings.self) private var settings
+    @Environment(\.scenePhase) private var phase
     let system: SystemSummary
     let game: Game
     let start: Start
@@ -228,6 +229,7 @@ struct PlayerView: View {
         .task(id: session?.id) { await pollProgress() }
         .task(id: stream != nil && !pictureShown && session != nil) { await countWait() }
         .task(id: stream != nil) { await watchForStalls() }
+        .onChange(of: phase) { _, phase in stream?.inactive = phase != .active }
         .onChange(of: menuOpen) { _, open in
             stream?.suspended = open
             if !open { menuPage = .main }
