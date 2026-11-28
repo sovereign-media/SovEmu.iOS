@@ -4,6 +4,7 @@
 // I420 planes copied into an NV12 one, and is shown at once (no timing of its own: the stream
 // is already paced). The picture is stretched to the view, which the player shapes to the
 // console's: never cropped. SovEmu.Android's `StreamView` and its `SharpDrawer`.
+import Accelerate
 import AVFoundation
 import CoreVideo
 import UIKit
@@ -17,9 +18,13 @@ final class SampleBufferVideoView: UIView, RTCVideoRenderer, @unchecked Sendable
         layer as! AVSampleBufferDisplayLayer
     }
 
-    /// Frames arrive on WebRTC's render thread; the pool and the copy are touched only there.
+    /// Frames arrive on WebRTC's render thread; the pool, the copy and the format are touched
+    /// only there.
     private var pool: CVPixelBufferPool?
     private var poolSize = (width: 0, height: 0)
+    /// The last frame's format, kept while frames match it: made again only when the size or
+    /// the decoder's pixel format changes.
+    private var format: CMVideoFormatDescription?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -34,10 +39,10 @@ final class SampleBufferVideoView: UIView, RTCVideoRenderer, @unchecked Sendable
     func setSize(_ size: CGSize) {}
 
     func renderFrame(_ frame: RTCVideoFrame?) {
-        guard let frame, let pixels = pixelBuffer(frame.buffer), let sample = Self.sample(pixels) else { return }
-        let display = self.display
-        if display.status == .failed { display.flush() }
-        display.enqueue(sample)
+        guard let frame, let pixels = pixelBuffer(frame.buffer), let sample = sample(pixels) else { return }
+        let renderer = display.sampleBufferRenderer
+        if renderer.status == .failed { renderer.flush() }
+        renderer.enqueue(sample)
     }
 
     // MARK: - Pixel buffers
@@ -53,20 +58,27 @@ final class SampleBufferVideoView: UIView, RTCVideoRenderer, @unchecked Sendable
               let uv = CVPixelBufferGetBaseAddressOfPlane(out, 1) else { return nil }
         let yStride = CVPixelBufferGetBytesPerRowOfPlane(out, 0)
         let uvStride = CVPixelBufferGetBytesPerRowOfPlane(out, 1)
-        for row in 0..<height {
-            (y + row * yStride).copyMemory(from: i420.dataY + row * Int(i420.strideY), byteCount: width)
-        }
-        let (cw, ch) = (Int(i420.chromaWidth), Int(i420.chromaHeight))
-        for row in 0..<ch {
-            let dst = (uv + row * uvStride).assumingMemoryBound(to: UInt8.self)
-            let u = i420.dataU + row * Int(i420.strideU)
-            let v = i420.dataV + row * Int(i420.strideV)
-            for x in 0..<cw {
-                dst[2 * x] = u[x]
-                dst[2 * x + 1] = v[x]
+        if yStride == Int(i420.strideY) {
+            y.copyMemory(from: i420.dataY, byteCount: yStride * height)
+        } else {
+            for row in 0..<height {
+                (y + row * yStride).copyMemory(from: i420.dataY + row * Int(i420.strideY), byteCount: width)
             }
         }
-        return out
+        // U and V interleaved into NV12's CbCr plane in one vectorised pass.
+        let (cw, ch) = (vImagePixelCount(i420.chromaWidth), vImagePixelCount(i420.chromaHeight))
+        var u = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: i420.dataU), height: ch, width: cw,
+                              rowBytes: Int(i420.strideU))
+        var v = vImage_Buffer(data: UnsafeMutableRawPointer(mutating: i420.dataV), height: ch, width: cw,
+                              rowBytes: Int(i420.strideV))
+        let error = withUnsafePointer(to: &u) { u in
+            withUnsafePointer(to: &v) { v in
+                var planes: [UnsafePointer<vImage_Buffer>?] = [u, v]
+                var channels: [UnsafeMutableRawPointer?] = [uv, uv + 1]
+                return vImageConvert_PlanarToChunky8(&planes, &channels, 2, 2, cw, ch, uvStride, vImage_Flags(kvImageNoFlags))
+            }
+        }
+        return error == kvImageNoError ? out : nil
     }
 
     /// An NV12 buffer of this size from a pool, remade when the size changes.
@@ -90,9 +102,12 @@ final class SampleBufferVideoView: UIView, RTCVideoRenderer, @unchecked Sendable
     }
 
     /// A sample buffer shown as soon as it is enqueued.
-    private static func sample(_ pixels: CVPixelBuffer) -> CMSampleBuffer? {
-        var format: CMVideoFormatDescription?
-        CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixels, formatDescriptionOut: &format)
+    private func sample(_ pixels: CVPixelBuffer) -> CMSampleBuffer? {
+        if format.map({ !CMVideoFormatDescriptionMatchesImageBuffer($0, imageBuffer: pixels) }) ?? true {
+            var made: CMVideoFormatDescription?
+            CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixels, formatDescriptionOut: &made)
+            format = made
+        }
         guard let format else { return nil }
         var timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: .zero, decodeTimeStamp: .invalid)
         var sample: CMSampleBuffer?

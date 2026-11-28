@@ -66,6 +66,10 @@ final class Controller {
     private var padHeldAt: TimeInterval = -.infinity
     /// Whether `read()` last saw the menu asked for (on the input queue only): for the trace.
     private var menuWasAsked = false
+    /// Called on `wakeQueue` whenever an input changes, with the event's time on the 32-bit
+    /// `client_time_ms` clock when GameController gives one (`observe`). Under `lock`.
+    private var wake: (@Sendable (Int64?) -> Void)?
+    private var wakeQueue: DispatchQueue?
 
     /// Every controller tvOS reports, with its profiles: for the trace.
     static func describeControllers() -> String {
@@ -84,6 +88,64 @@ final class Controller {
         observers.append(center.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] note in
             if let controller = note.object as? GCController { self?.leave(controller) }
         })
+        observers.append(center.addObserver(forName: .GCKeyboardDidConnect, object: nil, queue: .main) { [weak self] note in
+            if let keyboard = note.object as? GCKeyboard { self?.install(keyboard) }
+        })
+    }
+
+    // MARK: Waking on input
+
+    /// Calls `wake` on `queue` whenever a controller, the keyboard, the remote or the touch
+    /// controls change, instead of being polled: GameController's handlers run on `queue`, so
+    /// a press reaches the input pump without waiting for a timer. On the main thread.
+    func observe(on queue: DispatchQueue, wake: @escaping @Sendable (Int64?) -> Void) {
+        lock.withLock { (self.wake, wakeQueue) = (wake, queue) }
+        GCController.controllers().forEach(install)
+        if let keyboard = GCKeyboard.coalesced { install(keyboard) }
+    }
+
+    /// Stops `observe`'s handlers. On the main thread.
+    func stopObserving() {
+        lock.withLock { (wake, wakeQueue) = (nil, nil) }
+        for controller in GCController.controllers() {
+            controller.extendedGamepad?.valueChangedHandler = nil
+            controller.microGamepad?.valueChangedHandler = nil
+            controller.handlerQueue = .main
+        }
+        if let keyboard = GCKeyboard.coalesced {
+            keyboard.keyboardInput?.keyChangedHandler = nil
+            keyboard.handlerQueue = .main
+        }
+    }
+
+    private func install(_ controller: GCController) {
+        guard let queue = lock.withLock({ wakeQueue }) else { return }
+        controller.handlerQueue = queue
+        if let pad = controller.extendedGamepad {
+            pad.valueChangedHandler = { [weak self] pad, _ in
+                guard let self else { return }
+                // A controller's press, for `padActive`: recorded here because the input loop
+                // does not read the controllers while the menu is open.
+                lock.withLock { self.padHeldAt = ProcessInfo.processInfo.systemUptime }
+                changed(at: pad.lastEventTimestamp)
+            }
+        } else if let remote = controller.microGamepad {
+            // A Siri Remote: only its menu presses matter here.
+            remote.valueChangedHandler = { [weak self] remote, _ in self?.changed(at: remote.lastEventTimestamp) }
+        }
+    }
+
+    private func install(_ keyboard: GCKeyboard) {
+        guard let queue = lock.withLock({ wakeQueue }) else { return }
+        keyboard.handlerQueue = queue
+        keyboard.keyboardInput?.keyChangedHandler = { [weak self] input, _, _, _ in self?.changed(at: input.lastEventTimestamp) }
+    }
+
+    /// On `wakeQueue`: an event's time (seconds since boot, as `systemUptime`) on the 32-bit
+    /// millisecond clock acks are measured on.
+    private func changed(at timestamp: TimeInterval) {
+        let ms = timestamp > 0 ? Int64(UInt32(truncatingIfNeeded: Int64(timestamp * 1000))) : nil
+        lock.withLock { wake }?(ms)
     }
 
     deinit {
@@ -91,6 +153,7 @@ final class Controller {
     }
 
     private func join(_ controller: GCController) {
+        install(controller)
         guard controller.extendedGamepad != nil else { return }
         let identity = ControllerIdentity.identify(productCategory: controller.productCategory, vendorName: controller.vendorName)
         lock.lock()
@@ -280,9 +343,22 @@ final class Controller {
     // MARK: Play
 
     func setTouch(_ button: RetroButton, _ pressed: Bool) {
-        lock.lock()
-        defer { lock.unlock() }
-        if pressed { touch |= button.bit } else { touch &= ~button.bit }
+        updateTouch { pressed ? $0 | button.bit : $0 & ~button.bit }
+    }
+
+    /// Every touch control held at once (`TouchControls`).
+    func setTouch(_ state: UInt16) {
+        updateTouch { _ in state }
+    }
+
+    /// Changes what the touch controls hold, and wakes the input pump at once.
+    private func updateTouch(_ change: (UInt16) -> UInt16) {
+        let (wake, queue) = lock.withLock {
+            touch = change(touch)
+            return (self.wake, wakeQueue)
+        }
+        let now = Int64(Stream.now32())
+        queue?.async { wake?(now) }
     }
 
     func clear() {
@@ -305,7 +381,7 @@ final class Controller {
         let keyboardPort = self.keyboardPort
         let store = self.store
         let analogSticks = sticksAreAnalog
-        var pads: [(GCExtendedGamepad, Int, ControllerMap)] = []
+        var pads: [(pad: GCExtendedGamepad, port: Int, mapping: ControllerMap)] = []
         for controller in controllers {
             guard let pad = controller.extendedGamepad else { continue }
             let key = ObjectIdentifier(controller)
@@ -316,21 +392,22 @@ final class Controller {
         }
         lock.unlock()
 
-        let padHeld = pads.contains { !Self.pressedInputs($0.0).isEmpty || !Self.stickDirections($0.0).isEmpty }
-        if padHeld {
+        // Each pad's buttons and stick directions, read once.
+        let held = pads.map { (pressed: Self.pressedInputs($0.pad), directions: Self.stickDirections($0.pad)) }
+        if held.contains(where: { !$0.pressed.isEmpty || !$0.directions.isEmpty }) {
             lock.lock()
             padHeldAt = ProcessInfo.processInfo.systemUptime
             lock.unlock()
         }
-        for (pad, port, mapping) in pads {
-            let hotkeys = HotkeyReading.read(mapping.state(Self.pressedInputs(pad)))
+        for ((pad, port, mapping), (pressed, directions)) in zip(pads, held) {
+            let hotkeys = HotkeyReading.read(mapping.state(pressed))
             fastForward = fastForward || hotkeys.fastForward
             rewind = rewind || hotkeys.rewind
             menu = menu || hotkeys.menu || pad.buttonHome?.isPressed == true
             var state = hotkeys.state | mapping.state(Self.sticks(pad))
             // Unbound, the left stick doubles as the D-pad (not on a system that reads the sticks).
             if !analogSticks && !mapping.bindsLeftStick {
-                for direction in Self.stickDirections(pad) {
+                for direction in directions {
                     state |= ControllerMap.pad.state([direction])
                 }
             }
@@ -373,8 +450,8 @@ final class Controller {
         rewind = rewind || touchHotkeys.rewind
         let remoteMenu = Self.remoteMenuPressed(controllers)
         if (menu || touchHotkeys.menu || remoteMenu) && !menuWasAsked {
-            let home = pads.contains { $0.0.buttonHome?.isPressed == true }
-            inputTrace("read: menu asked (home=\(home) remote=\(remoteMenu) touch/keys=\(touchHotkeys.menu)) pads=\(pads.map { Self.pressedInputs($0.0).sorted() })")
+            let home = pads.contains { $0.pad.buttonHome?.isPressed == true }
+            inputTrace("read: menu asked (home=\(home) remote=\(remoteMenu) touch/keys=\(touchHotkeys.menu)) pads=\(held.map { $0.pressed.sorted() })")
         }
         menu = menu || touchHotkeys.menu || remoteMenu
         menuWasAsked = menu
