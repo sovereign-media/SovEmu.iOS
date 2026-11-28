@@ -46,6 +46,29 @@ struct LinkTests {
         #expect(LinkLabels.measuredLabel(done(state: "probing")) == "not measured")
     }
 
+    @Test func supersedesTakesTheFirstReportLaterProbingReportsAndTheResult() {
+        let probing = { (elapsedMs: Int) in
+            WireProtocol.Link(state: "probing", elapsedMs: elapsedMs, budgetMs: 2000, path: "relay-udp", estimateKbps: 18200,
+                              startKbps: 12000, rttMs: 24.5, stoppedBy: "")
+        }
+        #expect(LinkLabels.supersedes(nil, probing(0)))
+        #expect(LinkLabels.supersedes(probing(200), probing(400)))
+        #expect(LinkLabels.supersedes(probing(400), done()))
+    }
+
+    @Test func supersedesDropsAProbingReportThatArrivesLateAfterALaterOneOrTheResult() {
+        // The channel is unordered: a stale "probing" would take the loading bar's label back.
+        let probing = { (elapsedMs: Int) in
+            WireProtocol.Link(state: "probing", elapsedMs: elapsedMs, budgetMs: 2000, path: "relay-udp", estimateKbps: 18200,
+                              startKbps: 12000, rttMs: 24.5, stoppedBy: "")
+        }
+        #expect(!LinkLabels.supersedes(probing(400), probing(200)))
+        #expect(!LinkLabels.supersedes(done(), probing(1800)))
+        var later = done()
+        later.startKbps = 9000
+        #expect(LinkLabels.supersedes(done(), later))
+    }
+
     @Test func theAppsOwnRowsShowEvenWithAnOlderWorker() {
         // TURN server, transport and path come from WebRTC's statistics: an older worker, or the
         // check turned off, must not hide them.

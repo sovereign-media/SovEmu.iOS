@@ -53,6 +53,27 @@ struct APITests {
         #expect(sent[0]["id"] as? String == "s1" && sent[0]["sdp"] as? String == "v=0")
         #expect(sent[0]["client"] as? String == "ios 0.1.0 (iPhone, iOS 26.0)")
         #expect(sent[1]["client"] is NSNull)
+        #expect(sent[1]["capabilities"] is NSNull)
+    }
+
+    /// Without the document the server always picks VP8, which this device decodes on the CPU.
+    @Test func theOfferCarriesTheWholeCapabilitiesDocument() async throws {
+        let (api, bodies) = api(#"{"data":{"sessionOffer":"v=0\r\n"}}"#)
+        let document = Capabilities.document(
+            [DecoderChoice(codec: "H264", hardware: true, lowLatency: true, name: "VideoToolbox"),
+             DecoderChoice(codec: "VP8", hardware: false, lowLatency: true, name: "libvpx")],
+            screen: ScreenMode(width: 2532, height: 1170, refreshHz: 120))
+        _ = try await api.offer(sessionId: "s1", sdp: "v=0", capabilities: document)
+        let variables = try #require(try bodies.only()["variables"] as? [String: Any])
+        let sent = try #require(variables["capabilities"] as? [String: Any])
+        #expect(sent["version"] as? Int == 1)
+        let rows = try #require(sent["videoDecoders"] as? [[String: Any]])
+        #expect(rows.map { $0["codec"] as? String } == ["H264", "VP8"])
+        #expect(rows[0]["hardware"] as? Bool == true && rows[0]["lowLatency"] as? Bool == true)
+        #expect(rows[0]["name"] as? String == "VideoToolbox")
+        let display = try #require(sent["display"] as? [String: Any])
+        #expect(display["width"] as? Int == 2532 && display["height"] as? Int == 1170)
+        #expect(display["refreshHz"] as? Double == 120)
     }
 
     @Test func readsTheViewerAndAnUnknownRoleAsAViewer() async throws {
@@ -126,6 +147,18 @@ struct APITests {
             """).0.startSession(gameId: 8)
         #expect(session.id == "x" && session.gameId == 8 && !session.connected)
         #expect(session.discs == 2 && session.disc == 1)
+    }
+
+    /// Continuing is part of the start: no `loadState` races the stream before it exists.
+    @Test func startingFromASaveNamesItsSlotAndAFreshStartSendsNone() async throws {
+        let reply = #"{"data":{"startSession":{"id":"x","gameId":8,"system":"nes","title":"T","core":"FCEUmm","#
+            + #""width":256,"height":240,"fps":60.0,"connected":false,"discs":1,"disc":1}}}"#
+        let (api, bodies) = api(reply)
+        _ = try await api.startSession(gameId: 8, startId: "start-1", slot: 0)
+        _ = try await api.startSession(gameId: 8, startId: "start-2")
+        let sent = try bodies.all.map { try #require($0["variables"] as? [String: Any]) }
+        #expect(sent[0]["slot"] as? Int == 0 && sent[0]["startId"] as? String == "start-1")
+        #expect(sent[1]["slot"] is NSNull)
     }
 
     @Test func readsTheIceServersFromTheJsonScalar() async throws {

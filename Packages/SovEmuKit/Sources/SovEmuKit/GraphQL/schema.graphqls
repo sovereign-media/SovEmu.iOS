@@ -833,16 +833,32 @@ type ClientStreamStats {
 	Button to frame, as the client measures it (the display's own lag comes on top).
 	"""
 	inputToFrameMs: Float
+	"""
+	The input round trip, median and 95th percentile.
+	"""
 	inputRttMs: Float
+	inputRttP95Ms: Float
 	netRttMs: Float
 	jitterMs: Float
 	decodeMs: Float
 	fps: Float
 	kbps: Float
 	"""
-	Packets lost since the stream began.
+	Packets lost, and frames dropped (not decoded in time, or not shown), since the stream
+	began.
 	"""
 	packetsLost: Float
+	framesDropped: Float
+	"""
+	The picture the player decodes.
+	"""
+	width: Int
+	height: Int
+	"""
+	How the player reaches the worker: `direct`, or through the relay over `relay-udp`,
+	`relay-tcp` or `relay-tls`.
+	"""
+	path: String
 	"""
 	The player's video decoder.
 	"""
@@ -2193,9 +2209,11 @@ type Mutation {
 	"""
 	Starts a game (ending this user's running one first) and returns once it is ready to
 	stream. Give a `startId` (8–64 letters, digits, `-` or `_`) to follow its progress with
-	`startProgress` meanwhile.
+	`startProgress` meanwhile. Give a `slot` to continue from that save state: it is loaded
+	as the game starts, as `loadState` would, without a request of its own before the
+	client connects. A state that cannot be loaded is logged and the game starts afresh.
 	"""
-	startSession(gameId: Int!, startId: String): GameSession!
+	startSession(gameId: Int!, startId: String, slot: Int): GameSession!
 	"""
 	Ends a session, the player's own or (admins) anyone's; the worker writes the battery save
 	and the auto save first.
@@ -3064,12 +3082,14 @@ type SessionFailure {
 	"""
 	`refused` (the server would not start it: no core, a missing file, no 3D rendering, every
 	port in use), `error`, `crashed` (a signal: in the core, most often), `killed` (it would
-	not stop, or its start timed out) or `exited` (it left while loading without saying why).
+	not stop, or its start timed out), `over_limit` (it went over its memory or thread limit:
+	`message` says which) or `exited` (it left while loading without saying why).
 	"""
 	reason: String!
 	"""
-	What went wrong, in words: why the server refused it, or why its start failed; null for
-	a failure while playing (its last lines say what there is).
+	What went wrong, in words: why the server refused it, why its start failed, or which
+	limit it went over; null for any other failure while playing (its last lines say what
+	there is).
 	"""
 	message: String
 	exitCode: Int
@@ -3332,6 +3352,27 @@ type StreamHealth {
 	The send-bandwidth estimate, kbit/s.
 	"""
 	estimateKbps: Float
+	"""
+	In the interval: frames encoded, and of those the ones dropped before they left (the
+	send queue was full).
+	"""
+	encoded: Float!
+	unsent: Float!
+	"""
+	Keyframes sent, keyframes the player asked for (after loss), and asks ignored (a burst
+	answered with one keyframe).
+	"""
+	keyframes: Float!
+	keyframeRequests: Float!
+	keyframeRequestsIgnored: Float!
+	"""
+	Times the player went silent (Wi-Fi, mostly) and was heard again.
+	"""
+	dropouts: Float!
+	"""
+	The largest frame, bytes.
+	"""
+	largestFrame: Float!
 }
 
 """

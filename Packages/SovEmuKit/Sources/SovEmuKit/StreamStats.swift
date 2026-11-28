@@ -161,6 +161,13 @@ public struct StatsReading: Equatable, Sendable {
         (self.networkRttMs, self.decoder) = (networkRttMs, decoder)
         (self.hasVideo, self.local, self.remote) = (hasVideo, local, remote)
     }
+
+    /// The packets lost of the inbound video and audio together, each at least 0 as the web's
+    /// stats: WebRTC counts a duplicated packet as one fewer lost, so a stream with duplicates
+    /// and no loss reports a negative count, which the worker would log as nonsense.
+    public static func packetsLost(video: Double?, audio: Double?) -> Int {
+        Int(max(0, video ?? 0)) + Int(max(0, audio ?? 0))
+    }
 }
 
 /// Turns successive readings into the stats message: rates and per-frame averages come from the
@@ -208,7 +215,7 @@ public struct StatsSampler: Sendable {
             height: now.height,
             fps: now.framesPerSecond,
             kbps: seconds.map { (now.bytesReceived - (prev?.bytesReceived ?? 0)) * 8 / 1000 / $0 },
-            packetsLost: now.packetsLost,
+            packetsLost: max(0, now.packetsLost),
             framesDropped: now.framesDropped,
             decoder: now.decoder,
             path: path)

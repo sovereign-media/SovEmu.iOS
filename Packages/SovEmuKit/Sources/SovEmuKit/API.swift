@@ -539,9 +539,12 @@ public final class SovEmuAPI: Sendable {
         }
         return found.games.map { Game($0.fragments.gameFields) }
     }
-    /// Starts a game, named `startId` so its progress can be followed (`startProgress`).
-    public func startSession(gameId: Int64, startId: String? = nil) async throws -> SessionInfo {
-        let start = SovEmuGraphQL.StartSessionMutation(gameId: int32(gameId), startId: .orNull(startId))
+    /// Starts a game, named `startId` so its progress can be followed (`startProgress`), and
+    /// continuing from the save in `slot` when there is one: loaded as the game starts, with no
+    /// `loadState` of its own before the stream exists.
+    public func startSession(gameId: Int64, startId: String? = nil, slot: Int? = nil) async throws -> SessionInfo {
+        let start = SovEmuGraphQL.StartSessionMutation(gameId: int32(gameId), startId: .orNull(startId),
+                                                       slot: .orNull(slot.map { int32($0) }))
         let data = try await perform(start)
         return SessionInfo(data.startSession.fragments.sessionFields)
     }
@@ -633,13 +636,19 @@ public final class SovEmuAPI: Sendable {
         return URL(string: path, relativeTo: baseURL)?.absoluteURL
     }
     /// Sends the complete WebRTC offer SDP, naming the client (`ios 0.1.0 (iPad, iPadOS 18.1)`,
-    /// shown on the admin's sessions page); returns the worker's answer SDP.
-    public func offer(sessionId: String, sdp: String, client: String? = nil) async throws -> String {
-        try await perform(Self.offer(sessionId: sessionId, sdp: sdp, client: client)).sessionOffer
+    /// shown on the admin's sessions page) and what it can decode and show (`capabilities`, the
+    /// whole document every time: without one the server picks VP8); returns the worker's answer
+    /// SDP.
+    public func offer(sessionId: String, sdp: String, client: String? = nil,
+                      capabilities: ClientCapabilities? = nil) async throws -> String {
+        try await perform(Self.offer(sessionId: sessionId, sdp: sdp, client: client, capabilities: capabilities))
+            .sessionOffer
     }
 
-    static func offer(sessionId: String, sdp: String, client: String?) -> SovEmuGraphQL.SessionOfferMutation {
-        SovEmuGraphQL.SessionOfferMutation(id: sessionId, sdp: sdp, client: .orNull(client))
+    static func offer(sessionId: String, sdp: String, client: String?,
+                      capabilities: ClientCapabilities?) -> SovEmuGraphQL.SessionOfferMutation {
+        SovEmuGraphQL.SessionOfferMutation(id: sessionId, sdp: sdp, client: .orNull(client),
+                                           capabilities: .orNull(capabilities?.input))
     }
     /// Names this sign-in's device on the server ("SovEmu for iOS 0.1.0 · iPad"), for the
     /// admin's Devices page.

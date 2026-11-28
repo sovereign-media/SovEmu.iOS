@@ -50,6 +50,17 @@ struct ProtocolTests {
         #expect(second.decoder == "VideoToolbox")
     }
 
+    @Test func duplicatedPacketsNeverMakeTheLossNegative() {
+        // WebRTC counts a duplicate as one fewer lost: video and audio are each clamped before
+        // they are added, as the web's stats, so audio's real loss is not hidden by video's
+        // duplicates.
+        #expect(StatsReading.packetsLost(video: -3, audio: 2) == 2)
+        #expect(StatsReading.packetsLost(video: 4, audio: nil) == 4)
+        #expect(StatsReading.packetsLost(video: nil, audio: -1) == 0)
+        var sampler = StatsSampler()
+        #expect(sampler.sample(StatsReading(at: 1, packetsLost: -2)).packetsLost == 0)
+    }
+
     @Test func encodesAnalogLikeTheRustReference() {
         // `analog_layout_is_stable_and_round_trips` in SovEmu.Protocol.
         let a = WireProtocol.Analog(lx: -32768, ly: 32767, rx: 1, ry: -2, l2: 0, r2: 0x1234)

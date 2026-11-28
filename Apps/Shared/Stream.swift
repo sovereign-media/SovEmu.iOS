@@ -1,5 +1,6 @@
 import Foundation
 import SovEmuKit
+import Synchronization
 import WebRTC
 
 /// A connection to one game session: receive-only video and audio, plus the unordered,
@@ -22,11 +23,14 @@ final class Stream: NSObject {
     private let sessionId: String
     private let controller: Controller
     private let videoView: RTCVideoRenderer
+    /// What this device decodes and shows, sent with the offer: the server picks the codec by it.
+    private let capabilities: ClientCapabilities
     /// Read on the main thread (`UIDevice`), when the stream is made.
     private let clientName = ClientEvents.clientName
     private var pc: RTCPeerConnection!
     private var channel: RTCDataChannel!
-    private var gathered: CheckedContinuation<Void, Never>?
+    /// ICE gathering finished, or the wait for it gave up.
+    private let gathered = OneShot()
     private var timer: DispatchSourceTimer?
     /// Where the input pump runs, every 4 ms.
     private let inputQueue = DispatchQueue(label: "sovemu.input")
@@ -95,11 +99,13 @@ final class Stream: NSObject {
     /// The recent input round trips, in ms.
     var inputRtts: [Int64] { rttLock.withLock { rtts } }
 
-    init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer) {
+    init(api: SovEmuAPI, sessionId: String, iceServers: [IceServer], controller: Controller, videoView: RTCVideoRenderer,
+         capabilities: ClientCapabilities) {
         self.api = api
         self.sessionId = sessionId
         self.controller = controller
         self.videoView = videoView
+        self.capabilities = capabilities
         super.init()
         tap.latency = frameLatency
         tap.onFirst = { [weak self] in DispatchQueue.main.async { self?.onFirstFrame?() } }
@@ -119,6 +125,8 @@ final class Stream: NSObject {
         channel.delegate = self
     }
 
+    /// Offers and connects. Cancelled (the player left), it throws `CancellationError` and starts
+    /// nothing; the caller closes the stream.
     func connect() async throws {
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         let offer: RTCSessionDescription = try await withCheckedThrowingContinuation { cont in
@@ -131,24 +139,31 @@ final class Stream: NSObject {
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             }
         }
-        // Non-trickle: wait for every candidate (or 1.5 s) before sending the offer.
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { await withCheckedContinuation { self.gathered = $0 } }
-            group.addTask { try? await Task.sleep(for: .milliseconds(1500)) }
-            await group.next()
-            group.cancelAll()
-            self.gathered?.resume()
-            self.gathered = nil
+        // Non-trickle: wait for every candidate (or 1.5 s) before sending the offer. Gathering
+        // may have finished already, before the wait began.
+        if pc.iceGatheringState == .complete { gathered.fire() }
+        let timeout = Task { [gathered] in
+            // Cancelled once gathering finishes: the wait is over either way.
+            try? await Task.sleep(for: .milliseconds(1500))
+            gathered.fire()
         }
+        await gathered.wait()
+        timeout.cancel()
+        try Task.checkCancellation()
         let local = pc.localDescription?.sdp ?? offer.sdp
-        let answer = try await api.offer(sessionId: sessionId, sdp: local, client: clientName)
+        let answer = try await api.offer(sessionId: sessionId, sdp: local, client: clientName, capabilities: capabilities)
+        try Task.checkCancellation()
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             pc.setRemoteDescription(RTCSessionDescription(type: .answer, sdp: answer)) { error in
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
             }
         }
-        startPump()
-        await MainActor.run { self.startStats() }
+        try await MainActor.run {
+            // Closed meanwhile (`close` runs on the main thread): nothing may start after it.
+            guard !self.closed else { throw CancellationError() }
+            self.startPump()
+            self.startStats()
+        }
     }
 
     /// Sends this client's view of the stream to the worker once a second from the moment the
@@ -205,7 +220,7 @@ final class Stream: NSObject {
             framesPerSecond: num(video, "framesPerSecond"),
             width: num(video, "frameWidth").map { Int($0) },
             height: num(video, "frameHeight").map { Int($0) },
-            packetsLost: Int((num(video, "packetsLost") ?? 0) + (num(audio, "packetsLost") ?? 0)),
+            packetsLost: StatsReading.packetsLost(video: num(video, "packetsLost"), audio: num(audio, "packetsLost")),
             framesDropped: num(video, "framesDropped").map { Int($0) },
             networkRttMs: num(pair, "currentRoundTripTime").map { $0 * 1000 },
             decoder: video["decoderImplementation"] as? String,
@@ -279,8 +294,10 @@ final class Stream: NSObject {
         frameLatency.ackArrived(clientTimeMs: Int64(ack.clientTimeMs), nowMs: now)
     }
 
+    /// On the main thread.
     func close() {
         closed = true
+        gathered.fire()
         statsTimer?.invalidate()
         timer?.cancel()
         channel?.close()
@@ -290,10 +307,7 @@ final class Stream: NSObject {
 
 extension Stream: RTCPeerConnectionDelegate {
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {
-        if newState == .complete {
-            gathered?.resume()
-            gathered = nil
-        }
+        if newState == .complete { gathered.fire() }
     }
 
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCPeerConnectionState) {
@@ -340,13 +354,13 @@ extension Stream: RTCDataChannelDelegate {
             return
         }
         if let link = WireProtocol.decodeLink(buffer.data) {
-            DispatchQueue.main.async { self.setLink(link) }
+            DispatchQueue.main.async { if LinkLabels.supersedes(self.link, link) { self.setLink(link) } }
             return
         }
         guard let pipeline = WireProtocol.decodePipeline(buffer.data) else { return }
         DispatchQueue.main.async {
             // The check's result comes again with the pipeline: a lost `0x83` is not missed.
-            if let link = pipeline.link, self.link?.state != WireProtocol.Link.done { self.setLink(link) }
+            if let link = pipeline.link, self.link != link, LinkLabels.supersedes(self.link, link) { self.setLink(link) }
             guard pipeline != self.pipeline else { return }
             let notice = WireProtocol.qualityNotice(before: self.pipeline, now: pipeline)
             self.pipeline = pipeline
@@ -361,6 +375,40 @@ extension Stream {
     fileprivate func setLink(_ link: WireProtocol.Link) {
         self.link = link
         onLink?(link)
+    }
+}
+
+/// Something that happens once, and a wait for it: `fire` may come first, more than once, or from
+/// any thread, and the waiter is resumed exactly once. (A continuation resumed twice, as the ICE
+/// wait's could be when gathering finished as its timeout did, crashes the app.)
+private final class OneShot: Sendable {
+    private struct State {
+        var fired = false
+        var waiter: CheckedContinuation<Void, Never>?
+    }
+
+    private let state = Mutex(State())
+
+    func fire() {
+        let waiter = state.withLock { s -> CheckedContinuation<Void, Never>? in
+            guard !s.fired else { return nil }
+            s.fired = true
+            defer { s.waiter = nil }
+            return s.waiter
+        }
+        waiter?.resume()
+    }
+
+    /// Returns once `fire` has been called, at once if it was already.
+    func wait() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            let now = state.withLock { s in
+                if s.fired { return true }
+                s.waiter = c
+                return false
+            }
+            if now { c.resume() }
+        }
     }
 }
 

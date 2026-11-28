@@ -54,6 +54,16 @@ public enum LinkLabels {
         return path == "lan" ? "Home network" : "Remote"
     }
 
+    /// Whether a check report should replace the one shown. The input channel is unordered, so a
+    /// "probing" report can arrive after "done" (or after a later "probing"): it is stale, and
+    /// would send the loading bar's label and the Network rows back. A client checks its link
+    /// once.
+    public static func supersedes(_ current: WireProtocol.Link?, _ next: WireProtocol.Link) -> Bool {
+        guard let current else { return true }
+        if current.state == WireProtocol.Link.done { return next.state == WireProtocol.Link.done }
+        return next.state == WireProtocol.Link.done || next.elapsedMs >= current.elapsedMs
+    }
+
     /// `18.2 Mbit/s`, or `850 kbit/s` under a megabit.
     public static func rateLabel(_ kbps: Int) -> String {
         kbps >= 1000 ? String(format: "%.1f Mbit/s", locale: posix, Double(kbps) / 1000) : "\(kbps) kbit/s"
