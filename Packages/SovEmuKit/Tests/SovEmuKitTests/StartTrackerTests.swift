@@ -43,7 +43,10 @@ struct StartTrackerTests {
         start.connecting(attempt: 0)
         start.linked(link(WireProtocol.Link.done))
         start.waited(6200)
-        #expect(start.screen(title: "T", error: nil)?.detail == "6 s")
+        let screen = start.screen(title: "T", error: nil)
+        #expect(screen?.detail == "6 s")
+        // The wait moves the bar, so a long boot never looks stuck.
+        #expect((screen?.fraction ?? 0) > 0.97 && start.bar == screen?.fraction)
         start.connecting(attempt: 1)
         #expect(start.link == nil && start.waitedMs == 0)
     }
