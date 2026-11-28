@@ -1,7 +1,6 @@
 // What this device decodes and the screen it shows games on, read from WebRTC, VideoToolbox and
 // UIKit into SovEmuKit's `Capabilities` document (SovEmu.Android's `WebRtc.capabilities`, over
-// `LowLatencyVideoDecoderFactory`). Sent whole with every offer: without it the server always
-// picks VP8, which libvpx decodes on the CPU and the player then copies to NV12.
+// `LowLatencyVideoDecoderFactory`). Sent whole with every offer.
 
 import SovEmuKit
 import UIKit
@@ -9,10 +8,18 @@ import VideoToolbox
 import WebRTC
 
 enum DeviceCapabilities {
+    /// The codecs this app declares, of those WebRTC decodes: VP8 only for now. It keeps up in
+    /// real time, while H.264 from a server without a GPU (x264) held frames back and was not
+    /// playable; declaring only VP8 keeps the server's `auto` from choosing H.264 for this app.
+    /// Add a codec here once it has been measured on a device.
+    private static let declared: Set<String> = ["VP8"]
+
     /// The document, read on the main thread (`UIScreen`).
     @MainActor
     static func document() -> ClientCapabilities {
-        let decoders = RTCDefaultVideoDecoderFactory().supportedCodecs().map { decoder(for: $0.name) }
+        let decoders = RTCDefaultVideoDecoderFactory().supportedCodecs()
+            .filter { declared.contains($0.name.uppercased()) }
+            .map { decoder(for: $0.name) }
         return Capabilities.document(decoders, screen: screen())
     }
 
