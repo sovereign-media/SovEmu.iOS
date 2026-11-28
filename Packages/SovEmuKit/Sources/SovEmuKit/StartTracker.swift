@@ -54,10 +54,12 @@ public struct StartTracker: Sendable {
         advance()
     }
 
-    /// The session clock's tick: this connection has waited `ms` for its picture.
+    /// The session clock's tick: this connection has waited `ms` for its picture, and the bar
+    /// creeps on with it.
     public mutating func waited(_ ms: Int64) {
         guard !pictureShown else { return }
         waitedMs = ms
+        advance()
     }
 
     public mutating func shown() {
