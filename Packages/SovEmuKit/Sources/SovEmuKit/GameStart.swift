@@ -94,13 +94,28 @@ public let noPictureHintMs: Int64 = 20_000
 /// Where the check of the connection takes the bar: from the session being ready to almost full.
 private let network = (from: 0.85, to: 0.97)
 
+/// How far the bar creeps while connecting, and how fast: a little, so it never looks stuck,
+/// and never into the check of the connection's stretch, which starts again from its beginning.
+private let connectingTo = 0.88
+private let connectingCreepMs = 3000.0
+
+/// Likewise while waiting for the first picture, which can take a BIOS's boot.
+private let pictureTo = 0.995
+private let pictureCreepMs = 8000.0
+
+/// `from`, eased towards `to` over `waitedMs`: most of the way in a few `creepMs`, never quite
+/// there, so a stretch whose end cannot be known still moves. As SovEmu.Android's `creep`.
+private func creep(_ from: Double, _ to: Double, waitedMs: Int64, creepMs: Double) -> Double {
+    from + (to - from) * (1 - exp(-Double(max(0, waitedMs)) / creepMs))
+}
+
 /// The session is ready and this app is reaching it (ICE, then DTLS): nothing to show of the
 /// game yet, and the worker's check of the connection comes once connected. `attempt`: the
 /// reconnects so far (`ReconnectWatch`), 0 for the first connection.
 public func describeConnecting(waitedMs: Int64, attempt: Int = 0) -> LaunchView {
     let seconds = waitedMs / 1000
     return LaunchView(label: attempt > 0 ? "Reconnecting" : "Connecting", detail: seconds >= 3 ? "\(seconds) s" : "",
-                      fraction: network.from)
+                      fraction: creep(network.from, connectingTo, waitedMs: waitedMs, creepMs: connectingCreepMs))
 }
 
 /// The loading screen once reconnecting has given up.
@@ -127,7 +142,8 @@ public func describeFirstPicture(waitedMs: Int64) -> LaunchView {
     var parts: [String] = []
     if seconds >= 3 { parts.append("\(seconds) s") }
     if waitedMs >= noPictureHintMs { parts.append("still no picture: \(menuKey) opens the menu") }
-    return LaunchView(label: "Starting the game", detail: parts.joined(separator: " · "), fraction: network.to)
+    return LaunchView(label: "Starting the game", detail: parts.joined(separator: " · "),
+                      fraction: creep(network.to, pictureTo, waitedMs: waitedMs, creepMs: pictureCreepMs))
 }
 
 /// The loading screen's background: a picture, and how it is drawn.

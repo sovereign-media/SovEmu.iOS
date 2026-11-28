@@ -265,7 +265,8 @@ struct GameStartTests {
     }
 
     @Test func waitingForTheFirstPictureCountsTheWaitAndSaysHowToLeave() {
-        #expect(describeFirstPicture(waitedMs: 500) == LaunchView(label: "Starting the game", detail: "", fraction: 0.97))
+        #expect(describeFirstPicture(waitedMs: 0) == LaunchView(label: "Starting the game", detail: "", fraction: 0.97))
+        #expect(describeFirstPicture(waitedMs: 500).detail == "")
         #expect(describeFirstPicture(waitedMs: 6200).detail == "6 s")
         #expect(describeFirstPicture(waitedMs: 21_000).detail == "21 s · still no picture: ☰ opens the menu")
     }
@@ -288,8 +289,21 @@ struct GameStartTests {
     @Test func itSaysItIsConnectingUntilTheWorkerIsReached() {
         // Otherwise the screen read "Starting the game" for a second or two before it went back
         // to checking the connection.
-        #expect(describeConnecting(waitedMs: 500) == LaunchView(label: "Connecting", detail: "", fraction: 0.85))
+        #expect(describeConnecting(waitedMs: 0) == LaunchView(label: "Connecting", detail: "", fraction: 0.85))
+        #expect(describeConnecting(waitedMs: 500).detail == "")
         #expect(describeConnecting(waitedMs: 4200).detail == "4 s")
+    }
+
+    @Test func theBarCreepsThroughTheStretchesWhoseEndCannotBeKnown() {
+        // Connecting: from 0.85, a little way, never into the check's stretch beyond 0.88.
+        let connecting = [0, 1000, 5000, 60_000].map { describeConnecting(waitedMs: Int64($0)).fraction }
+        #expect(zip(connecting, connecting.dropFirst()).allSatisfy { $0 < $1 })
+        #expect(connecting.last! < 0.88)
+        // The first picture: from 0.97, never quite full.
+        let picture = [0, 2000, 10_000, 120_000].map { describeFirstPicture(waitedMs: Int64($0)).fraction }
+        #expect(abs(picture[0] - 0.97) < 1e-9)
+        #expect(zip(picture, picture.dropFirst()).allSatisfy { $0 < $1 })
+        #expect(picture.last! < 1)
     }
 
     @Test func itLeavesWhereThePlayerIsToTheNetworkChip() {
