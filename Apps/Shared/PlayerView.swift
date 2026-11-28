@@ -14,9 +14,6 @@ struct VideoView: UIViewRepresentable {
 /// Systems whose picture keeps its own shape rather than a TV's 4:3.
 private let handhelds: Set<String> = ["gb", "gbc", "gba", "gamegear"]
 
-/// Seconds without a new video frame, while playing, before it is reported as a stall.
-private let stallSeconds = 3
-
 /// Where stats are turned on, and on the overlay: they cost a little every second.
 private let statsWarning = "Showing stats can affect game performance."
 
@@ -68,21 +65,12 @@ private final class Chooser {
 }
 
 /// What the loading screen follows that changes while the game starts (the server's progress
-/// four times a second, the bar, the check of the connection, the wait for a picture, the
-/// reconnects): its own model, so only the loading screen redraws for it.
+/// four times a second, the check of the connection, the wait for a picture, the reconnects):
+/// its own model, so only the loading screen redraws for it.
 @MainActor
 @Observable
 private final class LoadingState {
-    /// The server's word on how far the start has got (nil until it has said), and the bar.
-    var progress: StartStatus?
-    var bar = 0.0
-    /// The worker's check of the connection before the stream starts (`0x83`), as it last said.
-    var link: WireProtocol.Link?
-    /// How long this connection has waited for its first picture.
-    var waitedMs: Int64 = 0
-    /// Reconnects so far, and whether reconnecting gave up before a picture.
-    var attempt = 0
-    var connectionFailed = false
+    var start = StartTracker()
 }
 
 /// The stats overlay's rows (nil while it is off or has no sample yet) and its graph, new every
@@ -94,13 +82,8 @@ private final class StatsState {
     var history = LatencyHistory()
 }
 
-/// What the wait for a first picture is counted for: this connection, while there is none.
-private struct WaitKey: Equatable {
-    var stream: ObjectIdentifier?
-    var waiting: Bool
-}
-
-/// The system's uptime in ms: the clock reconnecting is timed on, which only moves forward.
+/// The system's uptime in ms: the session's clock (reconnecting, the wait for a picture, stalls),
+/// which only moves forward.
 private func uptimeMs() -> Int64 { Int64(ProcessInfo.processInfo.systemUptime * 1000) }
 
 extension PeerState {
@@ -203,7 +186,7 @@ struct PlayerView: View {
             Decorated(decoration: decoration, aspect: aspect) { VideoView(view: video) }
                 .ignoresSafeArea()
             LoadingLayer(loading: loading, game: game, system: system, chooser: chooser, error: error,
-                         session: session, pictureShown: pictureShown, saveShot: saveShot)
+                         session: session, saveShot: saveShot)
             #if os(iOS)
             if showTouch && !menuOpen && session != nil && error == nil { TouchControls(controller: controller) }
             #endif
@@ -273,11 +256,6 @@ struct PlayerView: View {
         .persistentSystemOverlays(.hidden)
         .task { await begin() }
         .task(id: session?.id) { await pollProgress() }
-        // Counted again for each connection, as the web's.
-        .task(id: WaitKey(stream: stream.map(ObjectIdentifier.init), waiting: !pictureShown && session != nil)) {
-            await countWait()
-        }
-        .task(id: stream.map(ObjectIdentifier.init)) { await watchForStalls() }
         .onChange(of: phase) { _, phase in input?.inactive = phase != .active }
         .onChange(of: menuOpen) { _, open in
             input?.suspended = open
@@ -688,6 +666,7 @@ struct PlayerView: View {
                 }
             }
             session = started
+            loading.start.sessionReady()
             let made = first
             first = nil
             await keepConnected(sessionId: started.id, first: made, build: build)
@@ -727,6 +706,7 @@ struct PlayerView: View {
     private func keepConnected(sessionId: String, first: Task<Stream, Never>?, build: () -> Task<Stream, Never>) async {
         var watch = ReconnectWatch(nowMs: uptimeMs())
         var pending = first ?? build()
+        var attempt = 0
         while true {
             let s = await pending.value
             guard !Task.isCancelled else {
@@ -735,7 +715,9 @@ struct PlayerView: View {
             }
             let (events, sink) = AsyncStream.makeStream(of: LinkEvent.self)
             wire(s, sessionId: sessionId, events: sink)
-            loading.link = nil
+            // Its check, its wait for a picture and its stalls are counted afresh, as the web's.
+            loading.start.connecting(attempt: attempt)
+            var clock = SessionClock(nowMs: uptimeMs())
             stream = s
             input?.attach(s.channel)
             let connecting = Task {
@@ -748,6 +730,7 @@ struct PlayerView: View {
                     sink.yield(.offerFailed)
                 }
             }
+            // The session clock: one tick a second for this connection.
             let ticker = Task {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(1)) // Cancelled with the connection: it ends.
@@ -760,7 +743,10 @@ struct PlayerView: View {
                 switch event {
                 case .state(let state): verdict = watch.state(state, nowMs: uptimeMs())
                 case .offerFailed: verdict = watch.offerFailed(nowMs: uptimeMs())
-                case .tick: verdict = watch.tick(nowMs: uptimeMs())
+                case .tick:
+                    let now = uptimeMs()
+                    verdict = watch.tick(nowMs: now)
+                    tick(&clock, s, nowMs: now, sessionId: sessionId)
                 }
                 if verdict != .keep { break }
             }
@@ -771,7 +757,7 @@ struct PlayerView: View {
             s.close()
             guard !Task.isCancelled else { return }
             if case .reconnect(let n) = verdict {
-                loading.attempt = n
+                attempt = n
                 if pictureShown { flash("Reconnecting…") }
                 pending = build()
                 continue
@@ -779,7 +765,7 @@ struct PlayerView: View {
             if pictureShown {
                 error = "Lost the connection to the game"
             } else {
-                loading.connectionFailed = true
+                loading.start.gaveUp()
             }
             return
         }
@@ -788,12 +774,11 @@ struct PlayerView: View {
     /// The stream's callbacks, on the main thread; its states go to `events`.
     private func wire(_ s: Stream, sessionId: String, events: AsyncStream<LinkEvent>.Continuation) {
         s.onQuality = { showQuality($0) }
-        s.onFirstFrame = { pictureShown = true }
-        s.onLink = { l in
-            loading.link = l
-            // A check started again (the selected pair changed) does not take the bar back.
-            if l.state == WireProtocol.Link.probing { loading.bar = max(loading.bar, describeLink(l).fraction) }
+        s.onFirstFrame = {
+            pictureShown = true
+            loading.start.shown()
         }
+        s.onLink = { loading.start.linked($0) }
         // Weak: the stream keeps this closure, and a strong `s` in it kept every stream alive.
         s.onStats = { [weak s] stats, reading in
             guard let s, settings.stats else { return }
@@ -828,45 +813,25 @@ struct PlayerView: View {
     }
 
     /// The start's progress, polled four times a second while the session starts. A failed poll
-    /// keeps the last word; the bar only moves forward.
+    /// keeps the last word.
     private func pollProgress() async {
         guard session == nil, let api = model.api else { return }
-        var forward = ForwardOnly()
         while !Task.isCancelled, session == nil, error == nil {
-            if let status = try? await api.startProgress(startId: startId) {
-                loading.progress = status
-                loading.bar = forward.next(describeStart(status).fraction)
-            }
+            if let status = try? await api.startProgress(startId: startId) { loading.start.progressed(status) }
             try? await Task.sleep(for: .milliseconds(250))
         }
     }
 
-    /// How long the ready session has waited for its first picture.
-    private func countWait() async {
-        guard session != nil, !pictureShown else { return }
-        loading.waitedMs = 0
-        let since = Date()
-        while !Task.isCancelled, !pictureShown {
-            loading.waitedMs = Int64(Date().timeIntervalSince(since) * 1000)
-            try? await Task.sleep(for: .seconds(1))
-        }
-    }
-
-    /// A picture that stops while playing (not paused in the menu) is reported once it has been
-    /// still for `stallSeconds`. Before the first picture, the game is still starting.
-    private func watchForStalls() async {
-        guard let s = stream else { return }
-        var last = s.frames
-        var still = 0
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(1))
-            let frames = s.frames
-            let playing = everConnected && pictureShown && !menuOpen
-            still = playing && frames == last ? still + 1 : 0
-            last = frames
-            if still == stallSeconds {
-                ClientEvents.report(.streamStalled, "no new picture for \(stallSeconds) s", sessionId: session?.id)
-            }
+    /// The session clock's tick for the connection `s`: the stats sampled for the worker (and
+    /// the overlay), the loading screen's count of the wait for a picture, and a picture that
+    /// stops while playing (not paused in the menu) reported once it has been still for
+    /// `SessionClock.stallMs`. Before the first picture, the game is still starting.
+    private func tick(_ clock: inout SessionClock, _ s: Stream, nowMs: Int64, sessionId: String) {
+        s.sampleStats()
+        let t = clock.tick(nowMs: nowMs, frames: s.frames, playing: everConnected && pictureShown && !menuOpen)
+        loading.start.waited(t.elapsedMs)
+        if t.stalled {
+            ClientEvents.report(.streamStalled, "no new picture for \(SessionClock.stallMs / 1000) s", sessionId: sessionId)
         }
     }
 
@@ -951,19 +916,15 @@ private struct LoadingLayer: View {
     let chooser: Chooser
     let error: String?
     let session: SessionInfo?
-    let pictureShown: Bool
     let saveShot: String?
 
     var body: some View {
-        if let screen = GameStart.screen(title: game.title, error: error, progress: loading.progress, bar: loading.bar,
-                                         ready: session != nil, link: loading.link, pictureShown: pictureShown,
-                                         waitedMs: loading.waitedMs, attempt: loading.attempt,
-                                         connectionFailed: loading.connectionFailed)
+        if let screen = loading.start.screen(title: game.title, error: error)
             ?? (chooser.asking ? StartScreen(label: "") : nil) {
             Splash(game: game, system: system, screen: screen, chooser: chooser,
                    background: loadingBackground(saveShot: saveShot, image: game.image, boxArt: game.cover ?? game.thumb),
                    status: session.map { loadingStatus(core: $0.core, width: $0.width, height: $0.height, fps: $0.fps) } ?? "",
-                   network: LinkLabels.networkLabel(loading.link?.path ?? ""))
+                   network: LinkLabels.networkLabel(loading.start.link?.path ?? ""))
         }
     }
 }
